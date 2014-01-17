@@ -10,7 +10,7 @@
 #include "ext_time.h"
 #include "ext_itm.h"
 
-// 
+// External struct
 // 
 typedef struct sequencer
 {
@@ -20,7 +20,7 @@ typedef struct sequencer
   t_atomarray *storedAtoms;
 } t_sequencer;
 
-// 
+// Method headers
 // 
 void *sequencer_new(t_symbol *s, long argc, t_atom *argv);
 void sequencer_free(t_sequencer *x);
@@ -31,7 +31,7 @@ void sequencer_bang(t_sequencer *x);
 void sequencer_stop(t_sequencer *x);
 void sequencer_tick(t_sequencer *x);
 
-// 
+// External class
 // 
 static t_class *s_sequencer_class = NULL;
 
@@ -40,7 +40,14 @@ static t_class *s_sequencer_class = NULL;
 */
 int C74_EXPORT main(void)
 {
-  t_class *c = class_new( "sequencer", (method)sequencer_new, (method)sequencer_free, sizeof(t_sequencer), (method)0L, A_GIMME, 0);
+  t_class *c = class_new(
+    "sequencer",
+    (method)sequencer_new,
+    (method)sequencer_free,
+    sizeof(t_sequencer),
+    (method)0L,
+    A_GIMME,
+    0);
 
   class_addmethod(c, (method)sequencer_bang, "bang", 0);
   class_addmethod(c, (method)sequencer_stop, "stop", 0);
@@ -60,14 +67,17 @@ int C74_EXPORT main(void)
 void *sequencer_new(t_symbol *s, long argc, t_atom *argv)
 {
   t_sequencer *x = (t_sequencer *)object_alloc(s_sequencer_class);
-  long attrstart = attr_args_offset(argc, argv);
   t_atom a;
   
   // outlet
   x->d_outlet = listout(x);
   
   // time object (used to schedule events)
-  x->d_timeobj = (t_object*) time_new((t_object *)x, gensym("delaytime"), (method)sequencer_tick, TIME_FLAGS_TICKSONLY | TIME_FLAGS_USECLOCK);
+  x->d_timeobj = (t_object*) time_new(
+    (t_object *)x,
+    gensym("delaytime"),
+    (method)sequencer_tick,
+    TIME_FLAGS_TICKSONLY | TIME_FLAGS_USECLOCK);
 
   // Set time object to fire at zero.
   atom_setfloat(&a, 0.);
@@ -104,7 +114,7 @@ void sequencer_assist(t_sequencer *x, void *b, long m, long a, char *s) {
 }
 
 /**
-* List input: Hand off to anything input.
+* 'List' input: Hand off to 'anything' input.
 */
 void sequencer_list(t_sequencer *x, t_symbol *s, long argc, t_atom *argv)
 {
@@ -112,7 +122,7 @@ void sequencer_list(t_sequencer *x, t_symbol *s, long argc, t_atom *argv)
 }
 
 /**
-* Anything input: Set internal internal atom array to input.
+* 'Anything' input: Set internal internal atom array to input.
 *
 * Note: `msg` is discarded.
 */
@@ -122,7 +132,7 @@ void sequencer_anything(t_sequencer *x, t_symbol *msg, long argc, t_atom *argv)
 }
 
 /**
-* Bang input: schedule event at pre-defined time.
+* 'Bang' input: schedule event at pre-defined time.
 */
 void sequencer_bang(t_sequencer *x)
 {
