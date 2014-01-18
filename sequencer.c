@@ -151,9 +151,13 @@ void sequencer_stop(t_sequencer *x) {
 /**
 * Time object callback.
 *
+* TODO: return if transport is no longer running.
+*
 * XTRA:TODO: sanity check on dict format
 */
 void sequencer_tick(t_sequencer *x) {
+  t_itm *itm;
+  double now_ticks;
   t_dictionary *events;
   t_symbol **event_keys = NULL;
   t_symbol *event_key;
@@ -166,7 +170,11 @@ void sequencer_tick(t_sequencer *x) {
   long num_msg_atoms;
   t_atom *msg_atoms;
   t_max_err error;
-  
+
+  // get current time
+  itm = (t_itm *)time_getitm(x->d_timeobj);
+  now_ticks = itm_getticks(itm);
+
   // load events
   events = dictobj_findregistered_retain(x->dictionary_name);
 
@@ -185,7 +193,7 @@ void sequencer_tick(t_sequencer *x) {
     // and reschedule time object to fire at event time.
     error = dictionary_getfloat(event, gensym("at"), &event_at);
     if ((last_event_at != -1.0) && (last_event_at != event_at)) {
-      atom_setfloat(&next_event_at_atom, event_at);
+      atom_setfloat(&next_event_at_atom, event_at - now_ticks);
       time_setvalue(x->d_timeobj, NULL, 1, &next_event_at_atom);
       time_schedule(x->d_timeobj, NULL);
       break;
