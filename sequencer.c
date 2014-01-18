@@ -178,6 +178,12 @@ void sequencer_tick(t_sequencer *x) {
   // load events
   events = dictobj_findregistered_retain(x->dictionary_name);
 
+  // sanity check
+  if (!events) {
+    object_error((t_object*)x, "unable to reference dictionary named %s", x->dictionary_name);
+    return;
+  }
+
   // load event keys
   error = dictionary_getkeys(events, &num_events, &event_keys);
 
