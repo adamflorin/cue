@@ -19,6 +19,7 @@ typedef struct sequencer {
   void *d_outlet;
   t_object *d_timeobj;
   t_symbol *dictionary_name;
+  t_bool verbose;
 } t_sequencer;
 
 // Method headers
@@ -75,6 +76,9 @@ void *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
     gensym("delaytime"),
     (method)sequencer_tick,
     TIME_FLAGS_TICKSONLY | TIME_FLAGS_USECLOCK);
+
+  // debug mode
+  x->verbose = true;
 
   return x;
 }
@@ -142,6 +146,8 @@ void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
     object_error((t_object *)x, "Error loading events from '%s'. (%d)", x->dictionary_name->s_name, error);
     return;
   }
+  
+  if (x->verbose) object_post((t_object*)x, "First key in received dict %s is '%s'.", x->dictionary_name->s_name, event_keys[0]->s_name);
 
   // read first event 'at'
   error = dictionary_getdictionary(events, event_keys[0], (t_object **)&event);
@@ -178,6 +184,8 @@ void sequencer_stop(t_sequencer *x) {
 
 /**
 * Time object callback.
+*
+* TODO: reset or anything?
 *
 * XTRA:TODO: sanity check on dict format
 */
@@ -289,6 +297,8 @@ void sequencer_schedule(t_sequencer *x, double at_ticks) {
   // get current time
   itm = (t_itm *)itm_getglobal();
   now_ticks = itm_getticks(itm);
+
+  if (x->verbose) object_post((t_object*)x, "Scheduling %s for %f (now: %f).", x->dictionary_name->s_name, at_ticks, now_ticks);
 
   if (at_ticks >= now_ticks) {
     error = atom_setfloat(&next_event_at_atom, at_ticks - now_ticks);
