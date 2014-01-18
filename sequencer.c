@@ -9,15 +9,16 @@
 #include "ext_obex.h"
 #include "ext_time.h"
 #include "ext_itm.h"
+#include "ext_strings.h"
+#include "ext_dictobj.h"
 
 // External struct
 // 
-typedef struct sequencer
-{
+typedef struct sequencer {
   t_object d_obj;
   void *d_outlet;
   t_object *d_timeobj;
-  t_atomarray *storedAtoms;
+  t_symbol *dictionary_name;
 } t_sequencer;
 
 // Method headers
@@ -25,10 +26,8 @@ typedef struct sequencer
 void *sequencer_new(t_symbol *s, long argc, t_atom *argv);
 void sequencer_free(t_sequencer *x);
 void sequencer_assist(t_sequencer *x, void *b, long m, long a, char *s);
-void sequencer_list(t_sequencer *x, t_symbol *s, long argc, t_atom *argv);
-void sequencer_anything(t_sequencer *x, t_symbol *msg, long argc, t_atom *argv);
-void sequencer_bang(t_sequencer *x);
 void sequencer_stop(t_sequencer *x);
+void sequencer_dictionary(t_sequencer *x, t_symbol *s);
 void sequencer_tick(t_sequencer *x);
 
 // External class
@@ -38,8 +37,7 @@ static t_class *s_sequencer_class = NULL;
 /**
 * main: proto-init.
 */
-int C74_EXPORT main(void)
-{
+int C74_EXPORT main(void) {
   t_class *c = class_new(
     "sequencer",
     (method)sequencer_new,
@@ -49,11 +47,9 @@ int C74_EXPORT main(void)
     A_GIMME,
     0);
 
-  class_addmethod(c, (method)sequencer_bang, "bang", 0);
-  class_addmethod(c, (method)sequencer_stop, "stop", 0);
-  class_addmethod(c, (method)sequencer_list, "list", A_GIMME, 0);
-  class_addmethod(c, (method)sequencer_anything, "anything", A_GIMME, 0);
   class_addmethod(c, (method)sequencer_assist, "assist", A_CANT, 0);
+  class_addmethod(c, (method)sequencer_dictionary, "dictionary", A_SYM, 0);
+  class_addmethod(c, (method)sequencer_stop, "stop", 0);
  
   class_register(CLASS_BOX, c);
 
@@ -64,10 +60,8 @@ int C74_EXPORT main(void)
 /**
 * Create external.
 */
-void *sequencer_new(t_symbol *s, long argc, t_atom *argv)
-{
+void *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
   t_sequencer *x = (t_sequencer *)object_alloc(s_sequencer_class);
-  t_atom a;
   
   // outlet
   x->d_outlet = listout(x);
@@ -79,13 +73,6 @@ void *sequencer_new(t_symbol *s, long argc, t_atom *argv)
     (method)sequencer_tick,
     TIME_FLAGS_TICKSONLY | TIME_FLAGS_USECLOCK);
 
-  // Set time object to fire at zero.
-  atom_setfloat(&a, 0.);
-  time_setvalue(x->d_timeobj, NULL, 1, &a);
-
-  // Init atom storage
-  x->storedAtoms = atomarray_new(0, 0L);
-
   return x;
 }
 
@@ -94,7 +81,6 @@ void *sequencer_new(t_symbol *s, long argc, t_atom *argv)
 */
 void sequencer_free(t_sequencer *x) {
   freeobject(x->d_timeobj);
-  object_free(x->storedAtoms);
 }
 
 /**
@@ -114,48 +100,79 @@ void sequencer_assist(t_sequencer *x, void *b, long m, long a, char *s) {
 }
 
 /**
-* 'List' input: Hand off to 'anything' input.
-*/
-void sequencer_list(t_sequencer *x, t_symbol *s, long argc, t_atom *argv)
-{
-  sequencer_anything(x, NULL, argc, argv);
-}
-
-/**
-* 'Anything' input: Set internal internal atom array to input.
+* 'dictionary' input: Given a dictionary in a specific format (passed by reference),
+* queue up next events.
 *
-* Note: `msg` is discarded.
+* Assume that dictionary is in specified format, and is not empty.
+*
+* @params
+*   symbol - dictionary name
 */
-void sequencer_anything(t_sequencer *x, t_symbol *msg, long argc, t_atom *argv)
-{
-  atomarray_setatoms(x->storedAtoms, argc, argv);
-}
+void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
+  t_dictionary *events;
+  t_dictionary *event;
+  t_max_err error;
+  double at;
+  t_atom at_atom;
 
-/**
-* 'Bang' input: schedule event at pre-defined time.
-*/
-void sequencer_bang(t_sequencer *x)
-{
+  // store dict name immediately
+  x->dictionary_name = s;
+
+  // access 'events' dict
+  events = dictobj_findregistered_retain(x->dictionary_name);
+
+  // // TODO: sanity check
+  // if (!events) {
+  //   object_error((t_object*)x, "unable to reference dictionary named %s", x->dictionary_name);
+  //   return;
+  // }
+
+  // read first event 'at'
+  // TODO: this may not be at "0" if other events have been deleted (?)
+  error = dictionary_getdictionary(events, gensym("0"), (t_object **)&event);
+  error = dictionary_getfloat(event, gensym("at"), &at);
+
+  // release dictionary
+  dictobj_release(events);
+
+  // schedule event
+  atom_setfloat(&at_atom, at);
+  time_setvalue(x->d_timeobj, NULL, 1, &at_atom);
   time_schedule(x->d_timeobj, NULL);
 }
 
 /**
 * 'stop' input: shut it down.
 */
-void sequencer_stop(t_sequencer *x)
-{
+void sequencer_stop(t_sequencer *x) {
   time_stop(x->d_timeobj);
 }
 
 /**
 * Time object callback.
+*
+* TODO: continue scanning dict for other events at same time?
+* TODO: delete event once dispatched?
+* TODO: reschedule time object for time of next event.
+*
+* XTRA:TODO: sanity check on dict format
 */
-void sequencer_tick(t_sequencer *x)
-{
-  t_atom *outAtoms;
-  long numOutAtoms;
+void sequencer_tick(t_sequencer *x) {
+  t_dictionary *events;
+  t_dictionary *event;
+  t_max_err error;
+  long num_msg_atoms;
+  t_atom *msg_atoms;
 
-  // populate outAtoms with stored atoms
-  atomarray_getatoms(x->storedAtoms, &numOutAtoms, &outAtoms);
-  outlet_list(x->d_outlet, 0L, numOutAtoms, outAtoms);
+  events = dictobj_findregistered_retain(x->dictionary_name);
+
+  // read first event 'msg'
+  error = dictionary_getdictionary(events, gensym("0"), (t_object **)&event);
+  error = dictionary_getatoms(event, gensym("msg"), &num_msg_atoms, &msg_atoms);
+
+  // release dictionary
+  dictobj_release(events);
+
+  // output msg atoms
+  outlet_list(x->d_outlet, 0L, num_msg_atoms, msg_atoms);
 }
