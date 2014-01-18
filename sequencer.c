@@ -29,6 +29,7 @@ void sequencer_assist(t_sequencer *x, void *b, long m, long a, char *s);
 void sequencer_stop(t_sequencer *x);
 void sequencer_dictionary(t_sequencer *x, t_symbol *s);
 void sequencer_tick(t_sequencer *x);
+void sequencer_schedule(t_sequencer *x, double at_ticks);
 
 // External class
 // 
@@ -119,8 +120,7 @@ void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
   t_dictionary *events;
   t_dictionary *event;
   t_max_err error;
-  double at;
-  t_atom at_atom;
+  double at_ticks;
 
   // store dict name immediately
   x->dictionary_name = s;
@@ -130,19 +130,19 @@ void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
 
   // read first event 'at'
   error = dictionary_getdictionary(events, gensym("0"), (t_object **)&event);
-  error = dictionary_getfloat(event, gensym("at"), &at);
+  error = dictionary_getfloat(event, gensym("at"), &at_ticks);
 
   // schedule event
-  atom_setfloat(&at_atom, at);
-  time_setvalue(x->d_timeobj, NULL, 1, &at_atom);
-  time_schedule(x->d_timeobj, NULL);
+  sequencer_schedule(x, at_ticks);
 
-  // free memory
+  // release dict
   dictobj_release(events);
 }
 
 /**
 * 'stop' input: shut it down.
+*
+* TODO: clear Dict, too? Or will [js] be responsible for that?
 */
 void sequencer_stop(t_sequencer *x) {
   time_stop(x->d_timeobj);
@@ -154,8 +154,6 @@ void sequencer_stop(t_sequencer *x) {
 * XTRA:TODO: sanity check on dict format
 */
 void sequencer_tick(t_sequencer *x) {
-  t_itm *itm;
-  double now_ticks;
   t_dictionary *events;
   t_symbol **event_keys = NULL;
   t_symbol *event_key;
@@ -165,17 +163,16 @@ void sequencer_tick(t_sequencer *x) {
   t_dictionary *event;
   double event_at;
   double last_event_at = -1.0;
-  t_atom next_event_at_atom;
   long num_msg_atoms;
   t_atom *msg_atoms;
   t_max_err error;
 
   // get current time
-  itm = (t_itm *)itm_getglobal();
-  now_ticks = itm_getticks(itm);
+  // itm = (t_itm *)itm_getglobal();
+  // now_ticks = itm_getticks(itm);
 
   // return if transport is stopped
-  if (itm_getstate(itm) == 0) return;
+  // if (itm_getstate(itm) == 0) return;
 
   // load events
   events = dictobj_findregistered_retain(x->dictionary_name);
@@ -202,16 +199,11 @@ void sequencer_tick(t_sequencer *x) {
     // Load event time ('at')
     error = dictionary_getfloat(event, gensym("at"), &event_at);
 
-    // TODO: Bail if event is in the past?
-    // if (event_at < now_ticks) break;
-
     // Test even time against last event.
     // If this event is not at the same time, break,
     // and reschedule time object to fire at event time.
     if ((last_event_at != -1.0) && (last_event_at != event_at)) {
-      atom_setfloat(&next_event_at_atom, event_at - now_ticks);
-      time_setvalue(x->d_timeobj, NULL, 1, &next_event_at_atom);
-      time_schedule(x->d_timeobj, NULL);
+      sequencer_schedule(x, event_at);
       break;
     }
     last_event_at = event_at;
@@ -229,4 +221,25 @@ void sequencer_tick(t_sequencer *x) {
   // free memory
   if (event_keys) dictionary_freekeys(events, num_events, event_keys);
   dictobj_release(events);
+}
+
+/**
+* Schedule timer at time in ticks.
+*
+* This method is used internally--not exposed as an input.
+*/
+void sequencer_schedule(t_sequencer *x, double at_ticks) {
+  t_itm *itm;
+  double now_ticks;
+  t_atom next_event_at_atom;
+
+  // get current time
+  itm = (t_itm *)itm_getglobal();
+  now_ticks = itm_getticks(itm);
+
+  if (at_ticks >= now_ticks) {
+    atom_setfloat(&next_event_at_atom, at_ticks - now_ticks);
+    time_setvalue(x->d_timeobj, NULL, 1, &next_event_at_atom);
+    time_schedule(x->d_timeobj, NULL);
+  }
 }
