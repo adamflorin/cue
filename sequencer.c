@@ -118,6 +118,8 @@ void sequencer_assist(t_sequencer *x, void *b, long m, long a, char *s) {
 */
 void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
   t_dictionary *events;
+  long num_events = 0;
+  t_symbol **event_keys = NULL;
   t_dictionary *event;
   t_max_err error;
   double at_ticks;
@@ -128,8 +130,21 @@ void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
   // access 'events' dict
   events = dictobj_findregistered_retain(x->dictionary_name);
 
+  // sanity check
+  if (!events) {
+    object_error((t_object*)x, "unable to reference dictionary named %s", x->dictionary_name->s_name);
+    return;
+  }
+
+  // load event keys
+  error = dictionary_getkeys(events, &num_events, &event_keys);
+  if (error) {
+    object_error((t_object *)x, "Error loading events from '%s'. (%d)", x->dictionary_name->s_name, error);
+    return;
+  }
+
   // read first event 'at'
-  error = dictionary_getdictionary(events, gensym("0"), (t_object **)&event);
+  error = dictionary_getdictionary(events, event_keys[0], (t_object **)&event);
   if (error) {
     object_error((t_object *)x, "Error loading event from '%s'. (%d)", x->dictionary_name->s_name, error);
     return;
