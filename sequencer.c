@@ -151,8 +151,6 @@ void sequencer_stop(t_sequencer *x) {
 /**
 * Time object callback.
 *
-* TODO: return if transport is no longer running.
-*
 * XTRA:TODO: sanity check on dict format
 */
 void sequencer_tick(t_sequencer *x) {
@@ -175,6 +173,9 @@ void sequencer_tick(t_sequencer *x) {
   // get current time
   itm = (t_itm *)itm_getglobal();
   now_ticks = itm_getticks(itm);
+
+  // return if transport is stopped
+  if (itm_getstate(itm) == 0) return;
 
   // load events
   events = dictobj_findregistered_retain(x->dictionary_name);
