@@ -147,23 +147,29 @@ void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
     return;
   }
   
-  if (x->verbose) object_post((t_object*)x, "First key in received dict %s is '%s'.", x->dictionary_name->s_name, event_keys[0]->s_name);
+  if (num_events > 0) {
+    // dictionary is not empty
+    if (x->verbose) object_post((t_object*)x, "First key in received dict %s is '%s'.", x->dictionary_name->s_name, event_keys[0]->s_name);
 
-  // read first event 'at'
-  error = dictionary_getdictionary(events, event_keys[0], (t_object **)&event);
-  if (error) {
-    object_error((t_object *)x, "Error loading event from '%s'. (%d)", x->dictionary_name->s_name, error);
-    return;
+    // read first event 'at'
+    error = dictionary_getdictionary(events, event_keys[0], (t_object **)&event);
+    if (error) {
+      object_error((t_object *)x, "Error loading event from '%s'. (%d)", x->dictionary_name->s_name, error);
+      return;
+    }
+
+    error = dictionary_getfloat(event, gensym("at"), &at_ticks);
+    if (error) {
+      object_error((t_object *)x, "Error loading event time from '%s'. (%d)", x->dictionary_name->s_name, error);
+      return;
+    }
+
+    // schedule event
+    sequencer_schedule(x, at_ticks);
+  } else {
+    // dictionary is empty
+    sequencer_stop(x);
   }
-
-  error = dictionary_getfloat(event, gensym("at"), &at_ticks);
-  if (error) {
-    object_error((t_object *)x, "Error loading event time from '%s'. (%d)", x->dictionary_name->s_name, error);
-    return;
-  }
-
-  // schedule event
-  sequencer_schedule(x, at_ticks);
 
   // release dict
   error = dictobj_release(events);
