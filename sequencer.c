@@ -130,13 +130,26 @@ void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
 
   // read first event 'at'
   error = dictionary_getdictionary(events, gensym("0"), (t_object **)&event);
+  if (error) {
+    object_error((t_object *)x, "Error loading event from '%s'. (%d)", x->dictionary_name->s_name, error);
+    return;
+  }
+
   error = dictionary_getfloat(event, gensym("at"), &at_ticks);
+  if (error) {
+    object_error((t_object *)x, "Error loading event time from '%s'. (%d)", x->dictionary_name->s_name, error);
+    return;
+  }
 
   // schedule event
   sequencer_schedule(x, at_ticks);
 
   // release dict
-  dictobj_release(events);
+  error = dictobj_release(events);
+  if (error) {
+    object_error((t_object *)x, "Error releasing dict from '%s'. (%d)", x->dictionary_name->s_name, error);
+    return;
+  }
 }
 
 /**
@@ -179,12 +192,16 @@ void sequencer_tick(t_sequencer *x) {
 
   // sanity check
   if (!events) {
-    object_error((t_object*)x, "unable to reference dictionary named %s", x->dictionary_name);
+    object_error((t_object*)x, "unable to reference dictionary named %s", x->dictionary_name->s_name);
     return;
   }
 
   // load event keys
   error = dictionary_getkeys(events, &num_events, &event_keys);
+  if (error) {
+    object_error((t_object *)x, "Error loading events from '%s'. (%d)", x->dictionary_name->s_name, error);
+    return;
+  }
 
   // iterate through events
   for (event_index = 0; event_index < num_events; event_index++) {
@@ -195,9 +212,17 @@ void sequencer_tick(t_sequencer *x) {
 
     // load event
     error = dictionary_getdictionary(events, event_key, (t_object **)&event);
+    if (error) {
+      object_error((t_object *)x, "Error loading event from '%s'. (%d)", x->dictionary_name->s_name, error);
+      break;
+    }
 
     // Load event time ('at')
     error = dictionary_getfloat(event, gensym("at"), &event_at);
+    if (error) {
+      object_error((t_object *)x, "Error loading event time from '%s'. (%d)", x->dictionary_name->s_name, error);
+      return;
+    }
 
     // Test even time against last event.
     // If this event is not at the same time, break,
@@ -210,17 +235,29 @@ void sequencer_tick(t_sequencer *x) {
 
     // load event message
     error = dictionary_getatoms(event, gensym("msg"), &num_msg_atoms, &msg_atoms);
+    if (error) {
+      object_error((t_object *)x, "Error loading event message from '%s'. (%d)", x->dictionary_name->s_name, error);
+      return;
+    }
 
     // output event message
     outlet_list(x->d_outlet, 0L, num_msg_atoms, msg_atoms);
 
     // delete event
     error = dictionary_deleteentry(events, event_key);
+    if (error) {
+      object_error((t_object *)x, "Error deleting event from '%s'. (%d)", x->dictionary_name->s_name, error);
+      break;
+    }
   }
 
   // free memory
   if (event_keys) dictionary_freekeys(events, num_events, event_keys);
-  dictobj_release(events);
+  error = dictobj_release(events);
+  if (error) {
+    object_error((t_object *)x, "Error releasing events from '%s'. (%d)", x->dictionary_name->s_name, error);
+    return;
+  }
 }
 
 /**
@@ -232,13 +269,18 @@ void sequencer_schedule(t_sequencer *x, double at_ticks) {
   t_itm *itm;
   double now_ticks;
   t_atom next_event_at_atom;
+  t_max_err error;
 
   // get current time
   itm = (t_itm *)itm_getglobal();
   now_ticks = itm_getticks(itm);
 
   if (at_ticks >= now_ticks) {
-    atom_setfloat(&next_event_at_atom, at_ticks - now_ticks);
+    error = atom_setfloat(&next_event_at_atom, at_ticks - now_ticks);
+    if (error) {
+      object_error((t_object *)x, "Error scheduling timer for '%s'. (%d)", x->dictionary_name->s_name, error);
+      return;
+    }
     time_setvalue(x->d_timeobj, NULL, 1, &next_event_at_atom);
     time_schedule(x->d_timeobj, NULL);
   }
