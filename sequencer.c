@@ -199,10 +199,15 @@ void sequencer_tick(t_sequencer *x) {
     // load event
     error = dictionary_getdictionary(events, event_key, (t_object **)&event);
 
-    // Load event 'at', test against last event.
+    // Load event time ('at')
+    error = dictionary_getfloat(event, gensym("at"), &event_at);
+
+    // TODO: Bail if event is in the past?
+    // if (event_at < now_ticks) break;
+
+    // Test even time against last event.
     // If this event is not at the same time, break,
     // and reschedule time object to fire at event time.
-    error = dictionary_getfloat(event, gensym("at"), &event_at);
     if ((last_event_at != -1.0) && (last_event_at != event_at)) {
       atom_setfloat(&next_event_at_atom, event_at - now_ticks);
       time_setvalue(x->d_timeobj, NULL, 1, &next_event_at_atom);
