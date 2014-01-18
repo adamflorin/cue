@@ -161,6 +161,7 @@ void sequencer_tick(t_sequencer *x) {
   t_dictionary *events;
   t_symbol **event_keys = NULL;
   t_symbol *event_key;
+  char *event_key_string;
   long num_events = 0;
   long event_index;
   t_dictionary *event;
@@ -172,7 +173,7 @@ void sequencer_tick(t_sequencer *x) {
   t_max_err error;
 
   // get current time
-  itm = (t_itm *)time_getitm(x->d_timeobj);
+  itm = (t_itm *)itm_getglobal();
   now_ticks = itm_getticks(itm);
 
   // load events
@@ -190,6 +191,9 @@ void sequencer_tick(t_sequencer *x) {
   // iterate through events
   for (event_index = 0; event_index < num_events; event_index++) {
     event_key = event_keys[event_index];
+
+    // For NO apparent reason, THIS line makes everything work
+    event_key_string = event_key->s_name;
 
     // load event
     error = dictionary_getdictionary(events, event_key, (t_object **)&event);
