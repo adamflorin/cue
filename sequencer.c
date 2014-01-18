@@ -151,9 +151,6 @@ void sequencer_stop(t_sequencer *x) {
 /**
 * Time object callback.
 *
-* TODO: delete event once dispatched?
-* TODO: reschedule time object for time of next event.
-*
 * XTRA:TODO: sanity check on dict format
 */
 void sequencer_tick(t_sequencer *x) {
@@ -165,10 +162,11 @@ void sequencer_tick(t_sequencer *x) {
   t_dictionary *event;
   double event_at;
   double last_event_at = -1.0;
+  t_atom next_event_at_atom;
   long num_msg_atoms;
   t_atom *msg_atoms;
   t_max_err error;
-
+  
   // load events
   events = dictobj_findregistered_retain(x->dictionary_name);
 
@@ -183,10 +181,13 @@ void sequencer_tick(t_sequencer *x) {
     error = dictionary_getdictionary(events, event_key, (t_object **)&event);
 
     // Load event 'at', test against last event.
-    // If this event is not at the same time, break.
+    // If this event is not at the same time, break,
+    // and reschedule time object to fire at event time.
     error = dictionary_getfloat(event, gensym("at"), &event_at);
     if ((last_event_at != -1.0) && (last_event_at != event_at)) {
-      last_event_at = event_at;
+      atom_setfloat(&next_event_at_atom, event_at);
+      time_setvalue(x->d_timeobj, NULL, 1, &next_event_at_atom);
+      time_schedule(x->d_timeobj, NULL);
       break;
     }
     last_event_at = event_at;
@@ -197,8 +198,8 @@ void sequencer_tick(t_sequencer *x) {
     // output event message
     outlet_list(x->d_outlet, 0L, num_msg_atoms, msg_atoms);
 
-    // TODO: delete event once dispatched
-    // error = dictionary_deleteentry (events, event_key);
+    // delete event
+    error = dictionary_deleteentry(events, event_key);
   }
 
   // free memory
