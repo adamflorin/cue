@@ -154,12 +154,11 @@ void sequencer_schedule(t_sequencer *x) {
   long num_out_atoms;
   t_atom_float event_at; // float? double?
   
-  // Pull first item off of queue
+  // pull first item off of queue
   event_atoms = (t_atomarray *)linklist_getindex(x->queue, 0);
-  if (event_atoms == NULL) {
-    object_error((t_object *)x, "No event to schedule.");
-    return;
-  }
+
+  // if queue is empty, bail
+  if (event_atoms == NULL) return;
 
   // copy event atoms
   error = atomarray_getatoms(event_atoms, &num_out_atoms, &out_atoms);
@@ -269,8 +268,11 @@ void sequencer_timer_callback(t_sequencer *x) {
     if (x->verbose) object_post((t_object*)x, "Deleted first event from queue. Loop!");
   }
 
+  if (x->verbose) object_post((t_object*)x, "Exited loop. Queue length is %d.", linklist_getsize(x->queue));
+
   // if queue is now empty, send bang out "done" outlet
   if (linklist_getsize(x->queue) == 0) {
+    if (x->verbose) object_post((t_object*)x, "Queue empty. Send done event.");
     outlet_bang(x->done_outlet);
   }
 }
