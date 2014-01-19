@@ -161,8 +161,7 @@ void sequencer_schedule(t_sequencer *x) {
   }
 
   // copy event atoms
-  // TODO: is atomarray_getatoms() safe?
-  error = atomarray_copyatoms(event_atoms, &num_out_atoms, &out_atoms);
+  error = atomarray_getatoms(event_atoms, &num_out_atoms, &out_atoms);
   if (error) {
     object_error((t_object *)x, "Error copying event message for scheduling. (%d)", error);
     return;
@@ -242,8 +241,7 @@ void sequencer_timer_callback(t_sequencer *x) {
     }
 
     // copy event atoms
-    // TODO: is atomarray_getatoms() safe?
-    error = atomarray_copyatoms(event_atoms, &num_out_atoms, &out_atoms);
+    error = atomarray_getatoms(event_atoms, &num_out_atoms, &out_atoms);
     if (error) {
       object_error((t_object *)x, "Error copying event message for output. (%d)", error);
       break;
