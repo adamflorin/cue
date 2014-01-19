@@ -21,6 +21,7 @@ typedef struct _sequencer {
   t_object *timer;
   t_linklist  *queue;
   t_bool verbose;
+  t_bool overrideNow;
 } t_sequencer;
 
 // Method headers
@@ -68,6 +69,7 @@ int C74_EXPORT main(void) {
 */
 t_sequencer *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
   t_sequencer *x = (t_sequencer *)object_alloc(s_sequencer_class);
+  t_itm *itm;
   
   // outlet
   x->done_outlet = bangout(x);
@@ -85,6 +87,10 @@ t_sequencer *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
 
   // debug mode
   x->verbose = false;
+
+  // set "now" override--if transport is stopped
+  itm = (t_itm *)time_getitm(x->timer);
+  x->overrideNow = (itm_getstate(itm) == 0);
 
   return x;
 }
@@ -180,6 +186,7 @@ void sequencer_schedule(t_sequencer *x) {
 void sequencer_stop(t_sequencer *x) {
   time_stop(x->timer);
   linklist_clear(x->queue);
+  x->overrideNow = true;
 }
 
 /**
@@ -290,7 +297,7 @@ void sequencer_schedule_next(t_sequencer *x, double at_ticks) {
 
   // get current time
   itm = (t_itm *)time_getitm(x->timer);
-  now_ticks = itm_getticks(itm);
+  now_ticks = x->overrideNow ? 0.0 : itm_getticks(itm);
 
   if (x->verbose) {
     object_post((t_object*)x, "Attempting to schedule timer at %f (now: %f).",
@@ -305,5 +312,8 @@ void sequencer_schedule_next(t_sequencer *x, double at_ticks) {
     }
     time_setvalue(x->timer, NULL, 1, &next_event_at_atom);
     time_schedule(x->timer, NULL);
+
+    // switch off override
+    x->overrideNow = false;
   }
 }
