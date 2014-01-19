@@ -83,7 +83,7 @@ t_sequencer *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
   // linklist_flags(x->queue, OBJ_FLAG_OBJ);
 
   // debug mode
-  x->verbose = true;
+  x->verbose = false;
 
   return x;
 }
