@@ -136,17 +136,19 @@ void sequencer_dictionary(t_sequencer *x, t_symbol *s) {
 
   // sanity check
   if (!events) {
-    object_error((t_object*)x, "unable to reference dictionary named %s", x->dictionary_name->s_name);
+    object_error((t_object*)x, "Error loading '%s'", x->dictionary_name->s_name);
     return;
   }
 
   // load event keys
   error = dictionary_getkeys(events, &num_events, &event_keys);
   if (error) {
-    object_error((t_object *)x, "Error loading events from '%s'. (%d)", x->dictionary_name->s_name, error);
+    object_error((t_object *)x, "Error loading key from '%s'. (%d)", x->dictionary_name->s_name, error);
     return;
   }
-  
+
+  // if (x->verbose) dictionary_dump(events, 1, 0);
+
   if (num_events > 0) {
     // dictionary is not empty
     if (x->verbose) object_post((t_object*)x, "First key in received dict %s is '%s'.", x->dictionary_name->s_name, event_keys[0]->s_name);
@@ -221,14 +223,14 @@ void sequencer_tick(t_sequencer *x) {
 
   // sanity check
   if (!events) {
-    object_error((t_object*)x, "unable to reference dictionary named %s", x->dictionary_name->s_name);
+    object_error((t_object*)x, "Error loading '%s'", x->dictionary_name->s_name);
     return;
   }
 
   // load event keys
   error = dictionary_getkeys(events, &num_events, &event_keys);
   if (error) {
-    object_error((t_object *)x, "Error loading events from '%s'. (%d)", x->dictionary_name->s_name, error);
+    object_error((t_object *)x, "Error loading keys from '%s'. (%d)", x->dictionary_name->s_name, error);
     return;
   }
 
