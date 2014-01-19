@@ -80,7 +80,6 @@ t_sequencer *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
 
   // queue
   x->queue = linklist_new();
-  // linklist_flags(x->queue, OBJ_FLAG_OBJ);
 
   // debug mode
   x->verbose = false;
@@ -219,13 +218,6 @@ void sequencer_timer_callback(t_sequencer *x) {
   t_atom_long deleted_index;
   t_atom_float event_at; // float? double?
   double last_event_at = -1.0;
-
-  // get current time
-  // itm = (t_itm *)itm_getglobal();
-  // now_ticks = itm_getticks(itm);
-
-  // return if transport is stopped
-  // if (itm_getstate(itm) == 0) return;
 
   if (x->verbose) object_post((t_object*)x, "Fire event!");
 
