@@ -289,7 +289,7 @@ void sequencer_schedule_next(t_sequencer *x, double at_ticks) {
   t_max_err error;
 
   // get current time
-  itm = (t_itm *)itm_getglobal();
+  itm = (t_itm *)time_getitm(x->timer);
   now_ticks = itm_getticks(itm);
 
   if (x->verbose) {
