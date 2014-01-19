@@ -261,8 +261,9 @@ void sequencer_timer_callback(t_sequencer *x) {
     last_event_at = event_at;
 
     // output event message (minus first atom)
-    // TODO: make sure message is longer than one atom?
-    outlet_list(x->outlet, 0L, num_out_atoms-1, out_atoms+1);
+    if (num_out_atoms > 1) {
+      outlet_list(x->outlet, 0L, num_out_atoms-1, out_atoms+1);
+    }
 
     // remove event from queue
     deleted_index = linklist_deleteindex(x->queue, 0);
