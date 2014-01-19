@@ -16,7 +16,8 @@
 // 
 typedef struct _sequencer {
   t_object object;
-  void *outlet;
+  void *event_outlet;
+  void *done_outlet;
   t_object *timer;
   t_linklist  *queue;
   t_bool verbose;
@@ -69,7 +70,8 @@ t_sequencer *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
   t_sequencer *x = (t_sequencer *)object_alloc(s_sequencer_class);
   
   // outlet
-  x->outlet = listout(x);
+  x->done_outlet = bangout(x);
+  x->event_outlet = listout(x);
   
   // time object (used to schedule events)
   x->timer = (t_object*) time_new(
@@ -103,10 +105,10 @@ void sequencer_assist(t_sequencer *x, void *b, long m, long a, char *s) {
     switch (a) {
       case 0: sprintf(s, "Events, schedule, stop"); break;
     }
-  }
-  else {
+  } else {
     switch (a) {
       case 0: sprintf(s, "Event dispatch"); break;
+      case 1: sprintf(s, "Bang on queue empty"); break;
     }
   }
 }
@@ -254,7 +256,7 @@ void sequencer_timer_callback(t_sequencer *x) {
 
     // output event message (minus first atom)
     if (num_out_atoms > 1) {
-      outlet_list(x->outlet, 0L, num_out_atoms-1, out_atoms+1);
+      outlet_list(x->event_outlet, 0L, num_out_atoms-1, out_atoms+1);
     }
 
     // remove event from queue
@@ -265,6 +267,11 @@ void sequencer_timer_callback(t_sequencer *x) {
     }
 
     if (x->verbose) object_post((t_object*)x, "Deleted first event from queue. Loop!");
+  }
+
+  // if queue is now empty, send bang out "done" outlet
+  if (linklist_getsize(x->queue) == 0) {
+    outlet_bang(x->done_outlet);
   }
 }
 
@@ -283,7 +290,10 @@ void sequencer_schedule_next(t_sequencer *x, double at_ticks) {
   itm = (t_itm *)itm_getglobal();
   now_ticks = itm_getticks(itm);
 
-  if (x->verbose) object_post((t_object*)x, "Attempting to schedule timer at %f (now: %f).", at_ticks, now_ticks);
+  if (x->verbose) {
+    object_post((t_object*)x, "Attempting to schedule timer at %f (now: %f).",
+      at_ticks, now_ticks);
+  }
 
   if (at_ticks >= now_ticks) {
     error = atom_setfloat(&next_event_at_atom, at_ticks - now_ticks);
