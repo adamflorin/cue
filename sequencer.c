@@ -21,6 +21,9 @@ typedef struct _sequencer {
   t_object *timer;
   t_linklist  *queue;
   t_symbol *name;
+  t_symbol *critical_event_msg;
+  t_symbol *important_event_msg;
+  t_symbol *normal_event_msg;
   t_bool verbose;
   t_bool overrideNow;
 } t_sequencer;
@@ -39,7 +42,10 @@ void sequencer_timer_callback(t_sequencer *x);
 void sequencer_iterate(t_sequencer *x, t_bool output_now);
 void sequencer_schedule_next(t_sequencer *x, double at_ticks);
 
-const double GRACE_PERIOD_TICKS = 1.0;
+// Grace period constants
+// 
+const double IMPORTANT_GRACE_PERIOD_TICKS = 5.0;
+const double NORMAL_GRACE_PERIOD_TICKS = 50.0;
 
 // External class
 // 
@@ -94,8 +100,13 @@ t_sequencer *sequencer_new(t_symbol *s, long argc, t_atom *argv) {
   // name
   x->name = NULL;
 
+  // event levels: pre-generate symbols
+  x->critical_event_msg = gensym("done");
+  x->important_event_msg = gensym("midi");
+  x->normal_event_msg = gensym("ui");
+
   // debug mode
-  x->verbose = true;
+  x->verbose = false;
 
   // set "now" override--if transport is stopped
   itm = (t_itm *)time_getitm(x->timer);
@@ -138,9 +149,6 @@ void sequencer_name(t_sequencer *x, t_symbol *name) {
 
 /**
 * 'at' input: Insert received event into queue at appropriate place.
-*
-* Don't re-sort here, as events are generally added in batches.
-* See 'schedule' message.
 */
 void sequencer_at(t_sequencer *x, t_symbol *msg, long argc, t_atom *argv) {
   t_max_err error;
@@ -231,8 +239,10 @@ void sequencer_iterate(t_sequencer *x, t_bool output_now) {
   t_atomarray *event_atoms;
   t_atom *out_atoms;
   long num_out_atoms;
+  t_symbol *event_msg;
   t_atom_float event_at;
   t_atom_float event_from_now;
+  t_bool event_on_schedule;
   t_atom_long deleted_index;
   double last_event_at = -1.0;
 
@@ -261,18 +271,25 @@ void sequencer_iterate(t_sequencer *x, t_bool output_now) {
     event_at = atom_getfloat(out_atoms);
     event_from_now = event_at - now_ticks;
 
-    // if event is indeed in the future
-    if (event_at + GRACE_PERIOD_TICKS >= now_ticks) {
+    // get event message to determine level
+    event_msg = atom_getsym(out_atoms + 1);
 
-      if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_at);
+    // check if event is on schedule--according to level
+    event_on_schedule = (
+      ((event_msg == x->critical_event_msg) && (event_at >= now_ticks)) ||
+      ((event_msg == x->important_event_msg) && (event_at >= (now_ticks - IMPORTANT_GRACE_PERIOD_TICKS))) ||
+      ((event_msg == x->normal_event_msg) && (event_at >= (now_ticks - NORMAL_GRACE_PERIOD_TICKS)))
+    );
 
+    // if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_at);
+
+    if (!event_on_schedule && (event_msg != x->critical_event_msg)) {
+      object_warn((t_object *)x, "MISSED EVENT FOR %s. Was supposed to be %f, now is %f", x->name->s_name, event_at, now_ticks);
+    } else {
+      // event is on schedule OR it is critical
       if (output_now) {
-        // output this event, or schedule next
-
-        // Test event time against last event.
-        // If this event is not at the same time, break,
-        // and reschedule time object to fire at event time.
-        if ((last_event_at != -1.0) && (last_event_at != event_at)) {
+        // if this event is not at the same time as last event, schedule it for later.
+        if (event_on_schedule && (last_event_at != -1.0) && (last_event_at != event_at)) {
           sequencer_schedule_next(x, event_from_now);
           break;
         }
@@ -282,27 +299,27 @@ void sequencer_iterate(t_sequencer *x, t_bool output_now) {
           outlet_list(x->event_outlet, 0L, num_out_atoms-1, out_atoms+1);
         }
 
-        // remove event from queue
-        deleted_index = linklist_deleteindex(x->queue, 0);
-        if (deleted_index == -1) {
-          object_error((t_object *)x, "Error deleting first event in queue for %s.", x->name->s_name);
-          return;
-        }
+        last_event_at = event_at;
       } else {
-        // just schedule next event
-        sequencer_schedule_next(x, event_from_now);
-        break;
+        // schedule next event
+        if (event_on_schedule) {
+          sequencer_schedule_next(x, event_from_now);
+          break;
+        } else if (event_msg == x->critical_event_msg) {
+          // behind schedule, but this is a critical event--pass it along
+          // output event message (minus first atom)
+          if (num_out_atoms > 1) {
+            outlet_list(x->event_outlet, 0L, num_out_atoms-1, out_atoms+1);
+          }
+        }
       }
-      last_event_at = event_at;
-    } else {
-      // event was in the past: remove from queue and keep iterating
-      object_warn((t_object *)x, "MISSED EVENT FOR %s. Was supposed to be %f, now is %f", x->name->s_name, event_at, now_ticks);
+    }
 
-      deleted_index = linklist_deleteindex(x->queue, 0);
-      if (deleted_index == -1) {
-        object_error((t_object *)x, "Error deleting first event in queue for %s.", x->name->s_name);
-        return;
-      }
+    // remove event from queue
+    deleted_index = linklist_deleteindex(x->queue, 0);
+    if (deleted_index == -1) {
+      object_error((t_object *)x, "Error deleting first event in queue for %s.", x->name->s_name);
+      return;
     }
   }
 
