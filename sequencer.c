@@ -236,6 +236,7 @@ void sequencer_iterate(t_sequencer *x, t_bool output_now) {
   t_max_err error;
   t_itm *itm;
   double now_ticks;
+  double now_ticks_ish;
   t_atomarray *event_atoms;
   t_atom *out_atoms;
   long num_out_atoms;
@@ -245,10 +246,12 @@ void sequencer_iterate(t_sequencer *x, t_bool output_now) {
   t_bool event_on_schedule;
   t_atom_long deleted_index;
   double last_event_at = -1.0;
+  t_atom done_args[2];
 
   // get current time
   itm = (t_itm *)time_getitm(x->timer);
   now_ticks = x->overrideNow ? 0.0 : itm_getticks(itm);
+  now_ticks_ish = now_ticks - 0.00001;
 
   // iterate through events
   while (linklist_getsize(x->queue) > 0) {
@@ -276,50 +279,44 @@ void sequencer_iterate(t_sequencer *x, t_bool output_now) {
 
     // check if event is on schedule--according to level
     event_on_schedule = (
-      ((event_msg == x->critical_event_msg) && (event_at >= now_ticks)) ||
-      ((event_msg == x->important_event_msg) && (event_at >= (now_ticks - IMPORTANT_GRACE_PERIOD_TICKS))) ||
-      ((event_msg == x->normal_event_msg) && (event_at >= (now_ticks - NORMAL_GRACE_PERIOD_TICKS)))
+      ((event_msg == x->critical_event_msg) && (event_at >= now_ticks_ish)) ||
+      ((event_msg == x->important_event_msg) && (event_at >= (now_ticks_ish - IMPORTANT_GRACE_PERIOD_TICKS))) ||
+      ((event_msg == x->normal_event_msg) && (event_at >= (now_ticks_ish - NORMAL_GRACE_PERIOD_TICKS)))
     );
 
     // if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_at);
 
-    if (!event_on_schedule && (event_msg != x->critical_event_msg)) {
-      object_warn((t_object *)x, "MISSED EVENT FOR %s. Was supposed to be %f, now is %f", x->name->s_name, event_at, now_ticks);
-    } else {
-      // event is on schedule OR it is critical
-      if (output_now) {
-        // if this event is not at the same time as last event, schedule it for later.
-        if (event_on_schedule && (last_event_at != -1.0) && (last_event_at != event_at)) {
-          sequencer_schedule_next(x, event_from_now);
-          break;
-        }
-
-        // output event message (minus first atom)
-        if (num_out_atoms > 1) {
-          outlet_list(x->event_outlet, 0L, num_out_atoms-1, out_atoms+1);
-        }
-
-        last_event_at = event_at;
-      } else {
-        // schedule next event
-        if (event_on_schedule) {
-          sequencer_schedule_next(x, event_from_now);
-          break;
-        } else if (event_msg == x->critical_event_msg) {
-          // behind schedule, but this is a critical event--pass it along
-          // output event message (minus first atom)
-          if (num_out_atoms > 1) {
-            outlet_list(x->event_outlet, 0L, num_out_atoms-1, out_atoms+1);
-          }
-        }
-      }
+    if (!event_on_schedule) {
+      object_warn(
+        (t_object *)x,
+        "[%s] MISSED %s EVENT scheduled at %f but now it's %f",
+        x->name->s_name, event_msg->s_name, event_at, now_ticks);
     }
 
-    // remove event from queue
-    deleted_index = linklist_deleteindex(x->queue, 0);
-    if (deleted_index == -1) {
-      object_error((t_object *)x, "Error deleting first event in queue for %s.", x->name->s_name);
-      return;
+    if ((event_on_schedule && output_now && ((last_event_at == -1.0) || (last_event_at == event_at))) ||
+        (!event_on_schedule && (event_msg == x->critical_event_msg))) {
+      // output event right now (deleting it from the queue first so it doesn't get re-triggered)
+      deleted_index = linklist_deleteindex(x->queue, 0);
+      if (deleted_index == -1) {
+        object_error((t_object *)x, "Error deleting first event in queue for %s.", x->name->s_name);
+        return;
+      }
+      if (num_out_atoms > 1) {
+        if (event_msg == x->critical_event_msg) {
+          // append time to "done" event
+          atom_setlong(done_args, atom_getlong(out_atoms + 2));
+          atom_setfloat(done_args + 1, now_ticks / 480.0);
+          outlet_anything(x->event_outlet, x->critical_event_msg, 2, done_args);
+        } else {
+          // output event as-is
+          outlet_list(x->event_outlet, 0L, num_out_atoms-1, out_atoms+1);
+        }
+      }
+      last_event_at = event_at;
+    } else {
+      // schdule event
+      sequencer_schedule_next(x, event_from_now);
+      break;
     }
   }
 
