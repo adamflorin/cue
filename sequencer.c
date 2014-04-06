@@ -286,7 +286,7 @@ void sequencer_iterate(t_sequencer *x, t_bool output_now) {
 
     // if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_at);
 
-    if (!event_on_schedule) {
+    if (x->verbose && !event_on_schedule) {
       object_warn(
         (t_object *)x,
         "[%s] MISSED %s EVENT scheduled at %f but now it's %f",
