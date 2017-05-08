@@ -7,13 +7,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
-	<string>sequencer</string>
+	<string>cue</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.cycling74.sequencer</string>
+	<string>com.cycling74.cue</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>7.0.1</string>
 	<key>CFBundleLongVersionString</key>
-	<string>sequencer 7.0.1, Copyright 2014 Cycling '74</string>
+	<string>cue 7.0.1, Copyright 2014 Cycling '74</string>
 	<key>CFBundlePackageType</key>
 	<string>iLaX</string>
 	<key>CFBundleShortVersionString</key>
