@@ -1,7 +1,7 @@
 /**
 * cue.c: Cue Max messages at specified transport times
 *
-* Copyright 2014 Adam Florin
+* Copyright 2014-2017 Adam Florin
 */
 
 #include "ext.h"
@@ -11,21 +11,22 @@
 #include "ext_itm.h"
 #include "ext_strings.h"
 #include "ext_dictobj.h"
+#include <math.h>
 
 // External struct
 //
 typedef struct _cue {
   t_object object;
   void *event_outlet;
-  void *done_outlet;
+  void *scrub_outlet;
   t_object *timer;
   t_linklist  *queue;
+  double expected_at_ticks;
   t_symbol *name;
   t_symbol *critical_event_msg;
   t_symbol *important_event_msg;
   t_symbol *normal_event_msg;
   t_bool verbose;
-  t_bool overrideNow;
 } t_cue;
 
 // Method headers
@@ -38,9 +39,10 @@ void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv);
 void cue_schedule(t_cue *x);
 void cue_stop(t_cue *x);
 long cue_sort_list(void *left, void *right);
+void cue_scrub_event(t_object *event_raw, double *delta);
 void cue_timer_callback(t_cue *x);
 void cue_iterate(t_cue *x, t_bool output_now);
-void cue_schedule_next(t_cue *x, double at_ticks);
+void cue_schedule_next(t_cue *x, double desired_ticks, double now_ticks);
 
 // Grace period constants
 //
@@ -50,6 +52,8 @@ const double NORMAL_GRACE_PERIOD_TICKS = 50.0;
 // External class
 //
 static t_class *s_cue_class = NULL;
+
+static double const TICKS_PER_BEAT = 480.0;
 
 /**
 * main: proto-init.
@@ -81,10 +85,9 @@ int C74_EXPORT main(void) {
 */
 t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   t_cue *x = (t_cue *)object_alloc(s_cue_class);
-  t_itm *itm;
 
   // outlet
-  x->done_outlet = bangout(x);
+  x->scrub_outlet = floatout(x);
   x->event_outlet = listout(x);
 
   // time object (used to schedule events)
@@ -92,13 +95,16 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
     (t_object *)x,
     gensym("delaytime"),
     (method)cue_timer_callback,
-    TIME_FLAGS_TICKSONLY | TIME_FLAGS_USECLOCK);
+    TIME_FLAGS_TICKSONLY | TIME_FLAGS_USECLOCK
+  );
 
   // queue
   x->queue = linklist_new();
 
   // name
   x->name = NULL;
+
+  x->expected_at_ticks = -1.0;
 
   // event levels: pre-generate symbols
   x->critical_event_msg = gensym("done");
@@ -107,10 +113,6 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
 
   // debug mode
   x->verbose = false;
-
-  // set "now" override--if transport is stopped
-  itm = (t_itm *)time_getitm(x->timer);
-  x->overrideNow = (itm_getstate(itm) == 0);
 
   return x;
 }
@@ -188,7 +190,7 @@ void cue_schedule(t_cue *x) {
 void cue_stop(t_cue *x) {
   time_stop(x->timer);
   linklist_clear(x->queue);
-  x->overrideNow = true;
+  x->expected_at_ticks = -1.0;
 }
 
 /**
@@ -200,19 +202,36 @@ long cue_sort_list(void *left, void *right) {
   t_atomarray *right_event = (t_atomarray *)right;
   long left_event_length = 0;
   long right_event_length = 0;
-  t_atom *left_event_message;
-  t_atom *right_event_message;
+  t_atom *left_event_atoms;
+  t_atom *right_event_atoms;
   t_atom_float left_at;
   t_atom_float right_at;
   t_max_err error;
 
-  error = atomarray_getatoms(left_event, &left_event_length, &left_event_message);
-  error = atomarray_getatoms(right_event, &right_event_length, &right_event_message);
+  error = atomarray_getatoms(left_event, &left_event_length, &left_event_atoms);
+  error = atomarray_getatoms(right_event, &right_event_length, &right_event_atoms);
 
-  left_at = atom_getfloat(left_event_message);
-  right_at = atom_getfloat(right_event_message);
+  left_at = atom_getfloat(left_event_atoms);
+  right_at = atom_getfloat(right_event_atoms);
 
   return left_at < right_at;
+}
+
+/** Iterator to adjust 'at' time of event */
+void cue_scrub_event(t_object *event_raw, double *delta) {
+  long event_length = 0;
+  t_atom *event_atoms;
+  t_max_err error;
+
+  error = atomarray_getatoms(
+    (t_atomarray *)event_raw,
+    &event_length,
+    &event_atoms
+  );
+  error = atom_setfloat(
+    event_atoms + 0,
+    atom_getfloat(event_atoms + 0) + *delta
+  );
 }
 
 /**
@@ -242,16 +261,41 @@ void cue_iterate(t_cue *x, t_bool output_now) {
   long num_out_atoms;
   t_symbol *event_msg;
   t_atom_float event_at;
-  t_atom_float event_from_now;
   t_bool event_on_schedule;
-  t_atom_long deleted_index;
   double last_event_at = -1.0;
-  t_atom done_args[2];
+  t_atom_long deleted_index = -1;
 
   // get current time
   itm = (t_itm *)time_getitm(x->timer);
-  now_ticks = x->overrideNow ? 0.0 : itm_getticks(itm);
+  now_ticks = itm_getticks(itm);
   now_ticks_ish = now_ticks - 0.00001;
+
+  // if it's not the time we expected (due to user scrubbing),
+  // must then adjust all queued events accordingly
+  if (output_now && (x->expected_at_ticks != -1.0)) {
+    double scrub_delta = now_ticks - x->expected_at_ticks;
+
+    if (fabs(scrub_delta) > 0.000001 && (scrub_delta != -0.0)) {
+      // quantize scrub delta
+      double desired_ticks = ceil(now_ticks) + fmod(x->expected_at_ticks, 1.0);
+      if (desired_ticks > now_ticks + 1.0) {
+        desired_ticks -= 1.0;
+      }
+      scrub_delta = desired_ticks - x->expected_at_ticks;
+
+      // scrub all events
+      linklist_funall(x->queue, (method)cue_scrub_event, &scrub_delta);
+
+      // now output scrub_delta in beats for the benefit of others
+      outlet_float(x->scrub_outlet, scrub_delta / TICKS_PER_BEAT);
+
+      // if desired start time is in the future, re-schedule this call
+      if (desired_ticks > now_ticks) {
+        cue_schedule_next(x, desired_ticks, now_ticks);
+        return;
+      }
+    }
+  }
 
   // iterate through events
   while (linklist_getsize(x->queue) > 0) {
@@ -272,7 +316,6 @@ void cue_iterate(t_cue *x, t_bool output_now) {
 
     // get event time
     event_at = atom_getfloat(out_atoms);
-    event_from_now = event_at - now_ticks;
 
     // get event message to determine level
     event_msg = atom_getsym(out_atoms + 1);
@@ -293,37 +336,53 @@ void cue_iterate(t_cue *x, t_bool output_now) {
         x->name->s_name, event_msg->s_name, event_at, now_ticks);
     }
 
-    if ((event_on_schedule && output_now && ((last_event_at == -1.0) || (last_event_at == event_at))) ||
-        (!event_on_schedule && (event_msg == x->critical_event_msg))) {
-      // output event right now (deleting it from the queue first so it doesn't get re-triggered)
+    // check if event should be output now
+    if (
+      // outputting now and event is on schedule and is first in queue or is at same time as first in queue
+      (event_on_schedule && output_now && ((last_event_at == -1.0) || (last_event_at == event_at))) ||
+      // critical message is behind schedule (outputting now or not)
+      (!event_on_schedule && (event_msg == x->critical_event_msg))
+    ) {
+      // remove event from queue first so it doesn't get recursively
+      // re-triggered if it's a "done" event.
+      // "chuck" it so that it can be used for output, and freed afterwards.
+      error = linklist_chuckindex(x->queue, 0);
+      if (error) {
+        object_error((t_object *)x, "Error chucking first event in queue for %s.", x->name->s_name);
+        return;
+      }
+
+      // output event
+      if (num_out_atoms > 1) {
+        outlet_anything(x->event_outlet, event_msg, (short)(num_out_atoms-2), out_atoms+2);
+      }
+
+      // free event
+      error = object_free(event_atoms);
+      if (error) {
+        object_error((t_object *)x, "Error freeing event for %s. (%d)", x->name->s_name, error);
+        return;
+      }
+
+      // store time so that subsequent events at the same time may be output immediately
+      last_event_at = event_at;
+
+    } else if (
+      // outputting now and event is behind schedule
+      output_now && !event_on_schedule
+    ) {
+      // throw event out and keep moving
       deleted_index = linklist_deleteindex(x->queue, 0);
       if (deleted_index == -1) {
         object_error((t_object *)x, "Error deleting first event in queue for %s.", x->name->s_name);
         return;
       }
-      if (num_out_atoms > 1) {
-        if (event_msg == x->critical_event_msg) {
-          // append time to "done" event
-          atom_setlong(done_args, atom_getlong(out_atoms + 2));
-          atom_setfloat(done_args + 1, now_ticks / 480.0);
-          outlet_anything(x->event_outlet, x->critical_event_msg, 2, done_args);
-        } else {
-          // output event as-is
-          outlet_list(x->event_outlet, 0L, num_out_atoms-1, out_atoms+1);
-        }
-      }
-      last_event_at = event_at;
+
     } else {
-      // schdule event
-      cue_schedule_next(x, event_from_now);
+      // set timer to output event in the future
+      cue_schedule_next(x, event_at, now_ticks);
       break;
     }
-  }
-
-  // if queue is now empty, send bang out "done" outlet
-  if (linklist_getsize(x->queue) == 0) {
-    // if (x->verbose) object_post((t_object*)x, "Queue empty for %s. Send done event.", x->name->s_name);
-    outlet_bang(x->done_outlet);
   }
 }
 
@@ -332,24 +391,19 @@ void cue_iterate(t_cue *x, t_bool output_now) {
 *
 * This method is used internally--not exposed as an input.
 */
-void cue_schedule_next(t_cue *x, double at_ticks) {
+void cue_schedule_next(t_cue *x, double desired_ticks, double now_ticks) {
   t_atom next_event_at_atom;
   t_max_err error;
 
-  if (x->verbose) {
-    object_post((t_object*)x, "Attempting to schedule timer for %s at %f.",
-      x->name->s_name,
-      at_ticks);
-  }
+  // store expected callback time to compare with reality later
+  // (in case user has scrubbed around)
+  x->expected_at_ticks = desired_ticks;
 
-  error = atom_setfloat(&next_event_at_atom, at_ticks);
+  error = atom_setfloat(&next_event_at_atom, desired_ticks - now_ticks);
   if (error) {
     object_error((t_object *)x, "Error scheduling timer for %s. (%d)", x->name->s_name, error);
     return;
   }
   time_setvalue(x->timer, NULL, 1, &next_event_at_atom);
   time_schedule(x->timer, NULL);
-
-  // switch off override
-  x->overrideNow = false;
 }
