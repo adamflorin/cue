@@ -335,11 +335,11 @@ void cue_iterate(t_cue *x, t_bool output_now) {
   t_atom *out_atoms;
   long num_out_atoms;
   t_symbol *event_msg;
-  t_atom_float event_at;
+  t_atom_float event_ticks;
   t_bool event_expires;
-  double expiration_period_ms = -1;
+  double expiration_ticks = -1;
   t_bool event_on_schedule;
-  double last_event_at = -1.0;
+  double last_event_ticks = -1.0;
   t_atom_long deleted_index = -1;
 
   // get current time
@@ -392,7 +392,7 @@ void cue_iterate(t_cue *x, t_bool output_now) {
     }
 
     // get event time
-    event_at = atom_getfloat(out_atoms);
+    event_ticks = atom_getfloat(out_atoms);
 
     event_expires = false;
 
@@ -402,7 +402,7 @@ void cue_iterate(t_cue *x, t_bool output_now) {
     // look up expiration period
     if (dictionary_hasentry(x->expirations_dictionary, event_msg)) {
       event_expires = true;
-      error = dictionary_getfloat(x->expirations_dictionary, event_msg, &expiration_period_ms);
+      error = dictionary_getfloat(x->expirations_dictionary, event_msg, &expiration_ticks);
       if (error) {
         object_error((t_object *)x, "Error fetching expiration. (%d)", error);
         return;
@@ -410,28 +410,28 @@ void cue_iterate(t_cue *x, t_bool output_now) {
     }
 
     if (x->verbose) {
-      object_post((t_object*)x, "Event does %s expire, after %f ms.", event_expires ? "" : "not", expiration_period_ms);
+      object_post((t_object*)x, "Event does %s expire, after %f ms.", event_expires ? "" : "not", expiration_ticks);
     }
 
     // check if event is on schedule
     event_on_schedule = (
-      (!event_expires && (event_at >= now_ticks_ish)) ||
-      (event_expires && (event_at >= (now_ticks_ish - expiration_period_ms)))
+      (!event_expires && (event_ticks >= now_ticks_ish)) ||
+      (event_expires && (event_ticks >= (now_ticks_ish - expiration_ticks)))
     );
 
-    // if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_at);
+    // if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_ticks);
 
     if (x->verbose && !event_on_schedule) {
       object_warn(
         (t_object *)x,
         "[%s] MISSED %s EVENT scheduled at %f but now it's %f",
-        x->name->s_name, event_msg->s_name, event_at, now_ticks);
+        x->name->s_name, event_msg->s_name, event_ticks, now_ticks);
     }
 
     // check if event should be output now
     if (
       // outputting now and event is on schedule and is first in queue or is at same time as first in queue
-      (event_on_schedule && output_now && ((last_event_at == -1.0) || (last_event_at == event_at))) ||
+      (event_on_schedule && output_now && ((last_event_ticks == -1.0) || (last_event_ticks == event_ticks))) ||
       // critical message is behind schedule (outputting now or not)
       (!event_on_schedule && !event_expires)
     ) {
@@ -457,7 +457,7 @@ void cue_iterate(t_cue *x, t_bool output_now) {
       }
 
       // store time so that subsequent events at the same time may be output immediately
-      last_event_at = event_at;
+      last_event_ticks = event_ticks;
 
     } else if (
       // outputting now and event is behind schedule
@@ -472,7 +472,7 @@ void cue_iterate(t_cue *x, t_bool output_now) {
 
     } else {
       // set timer to output event in the future
-      cue_schedule_next(x, event_at, now_ticks);
+      cue_schedule_next(x, event_ticks, now_ticks);
       break;
     }
   }
