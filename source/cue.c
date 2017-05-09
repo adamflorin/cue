@@ -41,7 +41,7 @@ void cue_assist(t_cue *x, void *b, long m, long a, char *s);
 void cue_set_expirations(t_cue *x, void *attr, long argc, t_atom *argv);
 void cue_parse_expirations(t_cue *x);
 void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv);
-void cue_cue(t_cue *x);
+void cue_cue(t_cue *x, t_symbol *msg, long argc, t_atom *argv);
 void cue_clear(t_cue *x);
 long cue_sort_list(void *left, void *right);
 void cue_scrub_event(t_object *event_raw, double *delta);
@@ -71,7 +71,7 @@ int C74_EXPORT main(void) {
   // messages
   class_addmethod(c, (method)cue_assist, "assist", A_CANT, 0);
   class_addmethod(c, (method)cue_at, "at", A_GIMME, 0);
-  class_addmethod(c, (method)cue_cue, "cue", 0);
+  class_addmethod(c, (method)cue_cue, "cue", A_GIMME, 0);
   class_addmethod(c, (method)cue_clear, "clear", 0);
 
   // attributes
@@ -187,7 +187,7 @@ void cue_parse_expirations(t_cue *x) {
     message = atom_getsym(x->expirations + i);
     value = atom_getfloat(x->expirations + i + 1);
 
-    if (strcmp(message->s_name, "") == 0) {
+    if (message == gensym("")) {
       object_warn((t_object *)x, "Received invalid expiration: message isn't a string.");
       continue;
     }
@@ -245,7 +245,17 @@ void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
 *
 * Assume queue is sorted.
 */
-void cue_cue(t_cue *x) {
+void cue_cue(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
+  t_symbol *second_msg;
+
+  // if 'at' message is included, process it first
+  if (argc > 0) {
+    second_msg = atom_getsym(argv);
+    if (second_msg == gensym("at")) {
+      cue_at(x, second_msg, argc - 1, argv + 1);
+    }
+  }
+
   cue_iterate(x, false);
 }
 
