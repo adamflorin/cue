@@ -13,6 +13,8 @@
 #include "ext_dictobj.h"
 #include <math.h>
 
+#define MAX_EXPIRATIONS_LENGTH 8
+
 // External struct
 //
 typedef struct _cue {
@@ -21,11 +23,14 @@ typedef struct _cue {
   void *scrub_outlet;
   t_object *timer;
   t_linklist  *queue;
+
+  // expirations attribute
+  t_atom expirations[MAX_EXPIRATIONS_LENGTH];
+  long expirations_length;
+  t_dictionary *expirations_dictionary;
+
   double expected_at_ticks;
   t_symbol *name;
-  t_symbol *critical_event_msg;
-  t_symbol *important_event_msg;
-  t_symbol *normal_event_msg;
   t_bool verbose;
 } t_cue;
 
@@ -34,6 +39,8 @@ typedef struct _cue {
 t_cue *cue_new(t_symbol *s, long argc, t_atom *argv);
 void cue_free(t_cue *x);
 void cue_assist(t_cue *x, void *b, long m, long a, char *s);
+void cue_set_expirations(t_cue *x, void *attr, long argc, t_atom *argv);
+void cue_parse_expirations(t_cue *x);
 void cue_name(t_cue *x, t_symbol *name);
 void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv);
 void cue_schedule(t_cue *x);
@@ -43,11 +50,6 @@ void cue_scrub_event(t_object *event_raw, double *delta);
 void cue_timer_callback(t_cue *x);
 void cue_iterate(t_cue *x, t_bool output_now);
 void cue_schedule_next(t_cue *x, double desired_ticks, double now_ticks);
-
-// Grace period constants
-//
-const double IMPORTANT_GRACE_PERIOD_TICKS = 5.0;
-const double NORMAL_GRACE_PERIOD_TICKS = 50.0;
 
 // External class
 //
@@ -68,11 +70,17 @@ int C74_EXPORT main(void) {
     A_GIMME,
     0);
 
+  // messages
   class_addmethod(c, (method)cue_assist, "assist", A_CANT, 0);
   class_addmethod(c, (method)cue_name, "name", A_SYM, 0);
   class_addmethod(c, (method)cue_at, "at", A_GIMME, 0);
   class_addmethod(c, (method)cue_schedule, "schedule", 0);
   class_addmethod(c, (method)cue_stop, "stop", 0);
+
+  // attributes
+  CLASS_ATTR_ATOM_VARSIZE(c, "expirations", ATTR_FLAGS_NONE, t_cue, expirations, expirations_length, MAX_EXPIRATIONS_LENGTH);
+  CLASS_ATTR_ACCESSORS(c, "expirations", NULL, cue_set_expirations);
+  CLASS_ATTR_SAVE(c, "expirations", ATTR_FLAGS_NONE);
 
   class_register(CLASS_BOX, c);
 
@@ -85,6 +93,10 @@ int C74_EXPORT main(void) {
 */
 t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   t_cue *x = (t_cue *)object_alloc(s_cue_class);
+
+  if (!x) {
+    return x;
+  }
 
   // outlet
   x->scrub_outlet = floatout(x);
@@ -101,18 +113,19 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   // queue
   x->queue = linklist_new();
 
+  // init expirations dictionary
+  x->expirations_dictionary = dictionary_new();
+
   // name
   x->name = NULL;
 
   x->expected_at_ticks = -1.0;
 
-  // event levels: pre-generate symbols
-  x->critical_event_msg = gensym("done");
-  x->important_event_msg = gensym("midi");
-  x->normal_event_msg = gensym("ui");
-
   // debug mode
   x->verbose = false;
+
+  // load attributes
+  attr_args_process(x, argc, argv);
 
   return x;
 }
@@ -123,6 +136,7 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
 void cue_free(t_cue *x) {
   freeobject(x->timer);
   object_free(x->queue);
+  object_free(x->expirations_dictionary);
 }
 
 /**
@@ -137,6 +151,55 @@ void cue_assist(t_cue *x, void *b, long m, long a, char *s) {
     switch (a) {
       case 0: sprintf(s, "Event dispatch"); break;
       case 1: sprintf(s, "Bang on queue empty"); break;
+    }
+  }
+}
+
+/**
+* Override setter for @expirations attribute.
+*/
+void cue_set_expirations(t_cue *x, void *attr, long argc, t_atom *argv) {
+  // set
+  x->expirations_length = argc;
+  for (long i = 0; i < argc; i++) {
+    x->expirations[i] = argv[i];
+  }
+
+  // parse
+  cue_parse_expirations(x);
+}
+
+/**
+* Parse @expirations attribute and store in dictionary for lookup later.
+* Attribute format consists of string/float pairs, e.g. `midi 5 ui 50`.
+*/
+void cue_parse_expirations(t_cue *x) {
+  long i;
+  t_max_err error;
+  t_symbol *message;
+  t_atom_float value;
+
+  // clear dictionary
+  error = dictionary_clear(x->expirations_dictionary);
+  if (error) {
+    object_error((t_object *)x, "Error clearing expirations dictionary. (%d)", error);
+    return;
+  }
+
+  // parse attribute
+  for (i = 0; i < x->expirations_length; i += 2) {
+    message = atom_getsym(x->expirations + i);
+    value = atom_getfloat(x->expirations + i + 1);
+
+    if (strcmp(message->s_name, "") == 0) {
+      object_warn((t_object *)x, "Received invalid expiration: message isn't a string.");
+      continue;
+    }
+
+    error = dictionary_appendfloat(x->expirations_dictionary, message, value);
+    if (error) {
+      object_error((t_object *)x, "Error entering expirations into dictionary. (%d)", error);
+      return;
     }
   }
 }
@@ -261,6 +324,8 @@ void cue_iterate(t_cue *x, t_bool output_now) {
   long num_out_atoms;
   t_symbol *event_msg;
   t_atom_float event_at;
+  t_bool event_expires;
+  double expiration_period_ms = -1;
   t_bool event_on_schedule;
   double last_event_at = -1.0;
   t_atom_long deleted_index = -1;
@@ -317,14 +382,29 @@ void cue_iterate(t_cue *x, t_bool output_now) {
     // get event time
     event_at = atom_getfloat(out_atoms);
 
-    // get event message to determine level
+    event_expires = false;
+
+    // get event message
     event_msg = atom_getsym(out_atoms + 1);
 
-    // check if event is on schedule--according to level
+    // look up expiration period
+    if (dictionary_hasentry(x->expirations_dictionary, event_msg)) {
+      event_expires = true;
+      error = dictionary_getfloat(x->expirations_dictionary, event_msg, &expiration_period_ms);
+      if (error) {
+        object_error((t_object *)x, "Error fetching expiration. (%d)", error);
+        return;
+      }
+    }
+
+    if (x->verbose) {
+      object_post((t_object*)x, "Event does %s expire, after %f ms.", event_expires ? "" : "not", expiration_period_ms);
+    }
+
+    // check if event is on schedule
     event_on_schedule = (
-      ((event_msg == x->critical_event_msg) && (event_at >= now_ticks_ish)) ||
-      ((event_msg == x->important_event_msg) && (event_at >= (now_ticks_ish - IMPORTANT_GRACE_PERIOD_TICKS))) ||
-      ((event_msg == x->normal_event_msg) && (event_at >= (now_ticks_ish - NORMAL_GRACE_PERIOD_TICKS)))
+      (!event_expires && (event_at >= now_ticks_ish)) ||
+      (event_expires && (event_at >= (now_ticks_ish - expiration_period_ms)))
     );
 
     // if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_at);
@@ -341,7 +421,7 @@ void cue_iterate(t_cue *x, t_bool output_now) {
       // outputting now and event is on schedule and is first in queue or is at same time as first in queue
       (event_on_schedule && output_now && ((last_event_at == -1.0) || (last_event_at == event_at))) ||
       // critical message is behind schedule (outputting now or not)
-      (!event_on_schedule && (event_msg == x->critical_event_msg))
+      (!event_on_schedule && !event_expires)
     ) {
       // remove event from queue first so it doesn't get recursively
       // re-triggered if it's a "done" event.
