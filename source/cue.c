@@ -150,7 +150,7 @@ void cue_assist(t_cue *x, void *b, long m, long a, char *s) {
   } else {
     switch (a) {
       case 0: sprintf(s, "Event dispatch"); break;
-      case 1: sprintf(s, "Bang on queue empty"); break;
+      case 1: sprintf(s, "Scrub delta in ticks"); break;
     }
   }
 }
