@@ -1,5 +1,5 @@
 /**
-* cue.c: Cue Max messages at specified transport times
+* cue.c: Cue Max messages to be dispatched at specified transport times
 *
 * Copyright 2014-2017 Adam Florin
 */
@@ -52,8 +52,6 @@ void cue_schedule_next(t_cue *x, double desired_ticks, double now_ticks);
 // External class
 //
 static t_class *s_cue_class = NULL;
-
-static double const TICKS_PER_BEAT = 480.0;
 
 /**
 * main: proto-init.
@@ -364,7 +362,7 @@ void cue_iterate(t_cue *x, t_bool output_now) {
       linklist_funall(x->queue, (method)cue_scrub_event, &scrub_delta);
 
       // now output scrub_delta in beats for the benefit of others
-      outlet_float(x->scrub_outlet, scrub_delta / TICKS_PER_BEAT);
+      outlet_float(x->scrub_outlet, scrub_delta);
 
       // if desired start time is in the future, re-schedule this call
       if (desired_ticks > now_ticks) {
