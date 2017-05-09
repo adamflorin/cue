@@ -216,9 +216,23 @@ void cue_name(t_cue *x, t_symbol *name) {
 * 'at' input: Insert received event into queue at appropriate place.
 */
 void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
+  long first_argument_type;
   t_max_err error;
   t_atomarray *event_atoms;
   t_atom_long queue_length;
+
+  // validate time
+  first_argument_type = atom_gettype(argv);
+  if ((first_argument_type != A_LONG) && (first_argument_type != A_FLOAT)) {
+    object_error((t_object *)x, "Received invalid 'at' message: time is not a number.");
+    return;
+  }
+
+  // validate message
+  if (argc < 2) {
+    object_error((t_object *)x, "Received invalid 'at' message: no message to cue.");
+    return;
+  }
 
   // Build event from copy of args (atom array)
   event_atoms = atomarray_new(0, 0L);
