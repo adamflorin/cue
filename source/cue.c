@@ -409,10 +409,6 @@ void cue_iterate(t_cue *x, t_bool output_now) {
       }
     }
 
-    if (x->verbose) {
-      object_post((t_object*)x, "Event does %s expire, after %f ms.", event_expires ? "" : "not", expiration_ticks);
-    }
-
     // check if event is on schedule
     event_on_schedule = (
       (!event_expires && (event_ticks >= now_ticks_ish)) ||
