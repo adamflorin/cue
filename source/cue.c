@@ -23,15 +23,14 @@ typedef struct _cue {
   void *scrub_outlet;
   t_object *timer;
   t_linklist  *queue;
+  double expected_at_ticks;
 
-  // expirations attribute
+  // attributes
   t_atom expirations[MAX_EXPIRATIONS_LENGTH];
   long expirations_length;
   t_dictionary *expirations_dictionary;
-
-  double expected_at_ticks;
   t_symbol *name;
-  t_bool verbose;
+  char verbose;
 } t_cue;
 
 // Method headers
@@ -41,10 +40,9 @@ void cue_free(t_cue *x);
 void cue_assist(t_cue *x, void *b, long m, long a, char *s);
 void cue_set_expirations(t_cue *x, void *attr, long argc, t_atom *argv);
 void cue_parse_expirations(t_cue *x);
-void cue_name(t_cue *x, t_symbol *name);
 void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv);
-void cue_schedule(t_cue *x);
-void cue_stop(t_cue *x);
+void cue_cue(t_cue *x);
+void cue_clear(t_cue *x);
 long cue_sort_list(void *left, void *right);
 void cue_scrub_event(t_object *event_raw, double *delta);
 void cue_timer_callback(t_cue *x);
@@ -72,15 +70,17 @@ int C74_EXPORT main(void) {
 
   // messages
   class_addmethod(c, (method)cue_assist, "assist", A_CANT, 0);
-  class_addmethod(c, (method)cue_name, "name", A_SYM, 0);
   class_addmethod(c, (method)cue_at, "at", A_GIMME, 0);
-  class_addmethod(c, (method)cue_schedule, "schedule", 0);
-  class_addmethod(c, (method)cue_stop, "stop", 0);
+  class_addmethod(c, (method)cue_cue, "cue", 0);
+  class_addmethod(c, (method)cue_clear, "clear", 0);
 
   // attributes
   CLASS_ATTR_ATOM_VARSIZE(c, "expirations", ATTR_FLAGS_NONE, t_cue, expirations, expirations_length, MAX_EXPIRATIONS_LENGTH);
   CLASS_ATTR_ACCESSORS(c, "expirations", NULL, cue_set_expirations);
   CLASS_ATTR_SAVE(c, "expirations", ATTR_FLAGS_NONE);
+  CLASS_ATTR_SYM(c, "name", ATTR_FLAGS_NONE, t_cue, name);
+  CLASS_ATTR_CHAR(c, "verbose", 0, t_cue, verbose);
+  CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Verbose");
 
   class_register(CLASS_BOX, c);
 
@@ -102,7 +102,7 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   x->scrub_outlet = floatout(x);
   x->event_outlet = listout(x);
 
-  // time object (used to schedule events)
+  // time object (used to cue events)
   x->timer = (t_object*) time_new(
     (t_object *)x,
     gensym("delaytime"),
@@ -113,16 +113,12 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   // queue
   x->queue = linklist_new();
 
-  // init expirations dictionary
+  // attributes
   x->expirations_dictionary = dictionary_new();
-
-  // name
-  x->name = NULL;
+  x->name = gensym("unnamed");
+  x->verbose = 0;
 
   x->expected_at_ticks = -1.0;
-
-  // debug mode
-  x->verbose = false;
 
   // load attributes
   attr_args_process(x, argc, argv);
@@ -145,7 +141,7 @@ void cue_free(t_cue *x) {
 void cue_assist(t_cue *x, void *b, long m, long a, char *s) {
   if (m == ASSIST_INLET) {
     switch (a) {
-      case 0: sprintf(s, "Events, schedule, stop"); break;
+      case 0: sprintf(s, "at, cue, clear"); break;
     }
   } else {
     switch (a) {
@@ -205,14 +201,6 @@ void cue_parse_expirations(t_cue *x) {
 }
 
 /**
-* Name instance for debugging purposes.
-*/
-void cue_name(t_cue *x, t_symbol *name) {
-  if (x->verbose) object_post((t_object*)x, "Naming %s.", name->s_name);
-  x->name = name;
-}
-
-/**
 * 'at' input: Insert received event into queue at appropriate place.
 */
 void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
@@ -249,22 +237,22 @@ void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
     return;
   }
 
-  if (x->verbose) object_post((t_object*)x, "Added event to %s. Queue size %d.", x->name->s_name, queue_length);
+  if (x->verbose) object_post((t_object*)x, "Added event to %s. Queue size was %d.", x->name->s_name, queue_length);
 }
 
 /**
-* 'schedule' input: Set timer to fire for first event in queue.
+* 'cue' message: Set timer to fire for first event in queue.
 *
 * Assume queue is sorted.
 */
-void cue_schedule(t_cue *x) {
+void cue_cue(t_cue *x) {
   cue_iterate(x, false);
 }
 
 /**
-* 'stop' input: Stop timer, clear linked list.
+* 'clear' input: Stop timer, clear linked list.
 */
-void cue_stop(t_cue *x) {
+void cue_clear(t_cue *x) {
   time_stop(x->timer);
   linklist_clear(x->queue);
   x->expected_at_ticks = -1.0;
