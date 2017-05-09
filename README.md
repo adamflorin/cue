@@ -1,7 +1,7 @@
 # [cue]
 
 `[cue]` is a Max external that lets you cue Max messages
-at specified transport times.
+to be dispatched at specified transport times.
 
 ## Building
 
