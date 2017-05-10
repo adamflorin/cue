@@ -16,7 +16,6 @@
 #define MAX_EXPIRATIONS_LENGTH 8
 
 // External struct
-//
 typedef struct _cue {
   t_object object;
   void *event_outlet;
@@ -34,7 +33,6 @@ typedef struct _cue {
 } t_cue;
 
 // Method headers
-//
 t_cue *cue_new(t_symbol *s, long argc, t_atom *argv);
 void cue_free(t_cue *x);
 void cue_assist(t_cue *x, void *b, long m, long a, char *s);
@@ -46,16 +44,21 @@ void cue_clear(t_cue *x);
 long cue_sort_list(void *left, void *right);
 void cue_scrub_event(t_object *event_raw, double *delta);
 void cue_timer_callback(t_cue *x);
-void cue_iterate(t_cue *x, t_bool output_now);
+void cue_process_queue(t_cue *x, t_bool dispatching);
+void cue_dispatch_first_event(
+  t_cue *x,
+  t_atomarray *event_atoms,
+  long num_out_atoms,
+  t_atom *out_atoms
+);
+void cue_delete_first_event(t_cue *x);
 void cue_schedule_next(t_cue *x, double desired_ticks, double now_ticks);
+t_bool cue_check_for_scrub(t_cue *x, double now_ticks);
 
 // External class
-//
 static t_class *s_cue_class = NULL;
 
-/**
-* main: proto-init.
-*/
+/** Initialize external class */
 int C74_EXPORT main(void) {
   t_class *c = class_new(
     "cue",
@@ -73,9 +76,16 @@ int C74_EXPORT main(void) {
   class_addmethod(c, (method)cue_clear, "clear", 0);
 
   // attributes
-  CLASS_ATTR_ATOM_VARSIZE(c, "expirations", ATTR_FLAGS_NONE, t_cue, expirations, expirations_length, MAX_EXPIRATIONS_LENGTH);
+  CLASS_ATTR_ATOM_VARSIZE(
+    c,
+    "expirations",
+    ATTR_FLAGS_NONE,
+    t_cue,
+    expirations,
+    expirations_length,
+    MAX_EXPIRATIONS_LENGTH
+  );
   CLASS_ATTR_ACCESSORS(c, "expirations", NULL, cue_set_expirations);
-  CLASS_ATTR_SAVE(c, "expirations", ATTR_FLAGS_NONE);
   CLASS_ATTR_SYM(c, "name", ATTR_FLAGS_NONE, t_cue, name);
   CLASS_ATTR_CHAR(c, "verbose", 0, t_cue, verbose);
   CLASS_ATTR_STYLE_LABEL(c, "verbose", 0, "onoff", "Verbose");
@@ -86,9 +96,7 @@ int C74_EXPORT main(void) {
   return 0;
 }
 
-/**
-* Create external.
-*/
+/** Initialize external instance */
 t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   t_cue *x = (t_cue *)object_alloc(s_cue_class);
 
@@ -96,7 +104,7 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
     return x;
   }
 
-  // outlet
+  // outlets
   x->scrub_outlet = floatout(x);
   x->event_outlet = listout(x);
 
@@ -111,12 +119,12 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   // queue
   x->queue = linklist_new();
 
+  x->expected_at_ticks = -1.0;
+
   // attributes
   x->expirations_dictionary = dictionary_new();
   x->name = gensym("unnamed");
   x->verbose = 0;
-
-  x->expected_at_ticks = -1.0;
 
   // load attributes
   attr_args_process(x, argc, argv);
@@ -124,22 +132,18 @@ t_cue *cue_new(t_symbol *s, long argc, t_atom *argv) {
   return x;
 }
 
-/**
-* Destroy external.
-*/
+/** Destroy external instance */
 void cue_free(t_cue *x) {
   freeobject(x->timer);
   object_free(x->queue);
   object_free(x->expirations_dictionary);
 }
 
-/**
-* Hardcode user tooltip prompts.
-*/
+/** Configure user tooltip prompts */
 void cue_assist(t_cue *x, void *b, long m, long a, char *s) {
   if (m == ASSIST_INLET) {
     switch (a) {
-      case 0: sprintf(s, "at, cue, clear"); break;
+      case 0: sprintf(s, "Messages: at, cue, clear"); break;
     }
   } else {
     switch (a) {
@@ -149,9 +153,7 @@ void cue_assist(t_cue *x, void *b, long m, long a, char *s) {
   }
 }
 
-/**
-* Override setter for @expirations attribute.
-*/
+/** Override setter for @expirations attribute */
 void cue_set_expirations(t_cue *x, void *attr, long argc, t_atom *argv) {
   // set
   x->expirations_length = argc;
@@ -176,7 +178,12 @@ void cue_parse_expirations(t_cue *x) {
   // clear dictionary
   error = dictionary_clear(x->expirations_dictionary);
   if (error) {
-    object_error((t_object *)x, "Error clearing expirations dictionary. (%d)", error);
+    object_error(
+      (t_object *)x,
+      "Failed to clear expirations @ '%s' (%d)",
+      x->name->s_name,
+      error
+    );
     return;
   }
 
@@ -186,21 +193,28 @@ void cue_parse_expirations(t_cue *x) {
     value = atom_getfloat(x->expirations + i + 1);
 
     if (message == gensym("")) {
-      object_warn((t_object *)x, "Received invalid expiration: message isn't a string.");
+      object_warn(
+        (t_object *)x,
+        "Received invalid expiration @ '%s': message isn't a string",
+        x->name->s_name
+      );
       continue;
     }
 
     error = dictionary_appendfloat(x->expirations_dictionary, message, value);
     if (error) {
-      object_error((t_object *)x, "Error entering expirations into dictionary. (%d)", error);
+      object_error(
+        (t_object *)x,
+        "Error entering expirations @ '%s' (%d)",
+        x->name->s_name,
+        error
+      );
       return;
     }
   }
 }
 
-/**
-* 'at' input: Insert received event into queue at appropriate place.
-*/
+/** 'at' message: Insert received event into queue according to sort order */
 void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
   long first_argument_type;
   t_max_err error;
@@ -210,13 +224,21 @@ void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
   // validate time
   first_argument_type = atom_gettype(argv);
   if ((first_argument_type != A_LONG) && (first_argument_type != A_FLOAT)) {
-    object_error((t_object *)x, "Received invalid 'at' message: time is not a number.");
+    object_error(
+      (t_object *)x,
+      "Received invalid 'at' message @ '%s': time is not a number",
+      x->name->s_name
+    );
     return;
   }
 
   // validate message
   if (argc < 2) {
-    object_error((t_object *)x, "Received invalid 'at' message: no message to cue.");
+    object_error(
+      (t_object *)x,
+      "Received invalid 'at' message @ '%s': no message to cue",
+      x->name->s_name
+    );
     return;
   }
 
@@ -224,25 +246,37 @@ void cue_at(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
   event_atoms = atomarray_new(0, 0L);
   error = atomarray_setatoms(event_atoms, argc, argv);
   if (error) {
-    object_error((t_object *)x, "Error copying event message for %s. (%d)", x->name->s_name, error);
+    object_error(
+      (t_object *)x,
+      "Failed to build event @ '%s' (%d)",
+      x->name->s_name,
+      error
+    );
     return;
   }
 
   // push event onto queue
   queue_length = linklist_insert_sorted(x->queue, event_atoms, cue_sort_list);
   if (queue_length == -1) {
-    object_error((t_object *)x, "Error adding event to queue for %s.", x->name->s_name);
+    object_error(
+      (t_object *)x,
+      "Failed to push event to queue @ '%s'",
+      x->name->s_name
+    );
     return;
   }
 
-  if (x->verbose) object_post((t_object*)x, "Added event to %s. Queue size was %d.", x->name->s_name, queue_length);
+  if (x->verbose) {
+    object_post(
+      (t_object*)x,
+      "Added event to queue @ '%s' (new size: %d)",
+      x->name->s_name,
+      queue_length + 1
+    );
+  }
 }
 
-/**
-* 'cue' message: Set timer to fire for first event in queue.
-*
-* Assume queue is sorted.
-*/
+/** 'cue' message: Process queue, checking for 'at' message first */
 void cue_cue(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
   t_symbol *second_msg;
 
@@ -254,22 +288,21 @@ void cue_cue(t_cue *x, t_symbol *msg, long argc, t_atom *argv) {
     }
   }
 
-  cue_iterate(x, false);
+  cue_process_queue(x, false);
 }
 
-/**
-* 'clear' input: Stop timer, clear linked list.
-*/
+/** 'clear' input: Stop timer, clear linked list. */
 void cue_clear(t_cue *x) {
+  if (x->verbose) {
+    object_post((t_object*)x, "Clearing queue @ '%s'", x->name->s_name);
+  }
+
   time_stop(x->timer);
   linklist_clear(x->queue);
   x->expected_at_ticks = -1.0;
 }
 
-/**
-* Given two events (atom arrays), determine which is greater,
-* based on first value (i.e. "at" time in ticks).
-*/
+/** linklist sort handler: Sort by 'at' time in ticks (first value in array) */
 long cue_sort_list(void *left, void *right) {
   t_atomarray *left_event = (t_atomarray *)left;
   t_atomarray *right_event = (t_atomarray *)right;
@@ -281,8 +314,16 @@ long cue_sort_list(void *left, void *right) {
   t_atom_float right_at;
   t_max_err error;
 
-  error = atomarray_getatoms(left_event, &left_event_length, &left_event_atoms);
-  error = atomarray_getatoms(right_event, &right_event_length, &right_event_atoms);
+  error = atomarray_getatoms(
+    left_event,
+    &left_event_length,
+    &left_event_atoms
+  );
+  error = atomarray_getatoms(
+    right_event,
+    &right_event_length,
+    &right_event_atoms
+  );
 
   left_at = atom_getfloat(left_event_atoms);
   right_at = atom_getfloat(right_event_atoms);
@@ -290,7 +331,7 @@ long cue_sort_list(void *left, void *right) {
   return left_at < right_at;
 }
 
-/** Iterator to adjust 'at' time of event */
+/** linklist iterator: Offset 'at' time of event */
 void cue_scrub_event(t_object *event_raw, double *delta) {
   long event_length = 0;
   t_atom *event_atoms;
@@ -307,47 +348,276 @@ void cue_scrub_event(t_object *event_raw, double *delta) {
   );
 }
 
-/**
-* Time object callback: Output all events in queue specified to fire at this time.
-*
-* If any future events remain in the queue, re-schedule them to fire at their time.
-*/
+/** timer callback: Process queue */
 void cue_timer_callback(t_cue *x) {
-  // if (x->verbose) object_post((t_object*)x, "Callback fired in %s", x->name->s_name);
-
-  cue_iterate(x, true);
+  cue_process_queue(x, true);
 }
 
-
 /**
-* Iterate through queue, scheduling next events, deleting past events, and outputting current ones.
+* Process events queue--dispatching, deleting, or cueing events as needed.
 *
-* @param output_now - if true, output events. If false, just schedule first event.
+* Iterate through each event in queue, assuming that it is sorted by 'at' time.
+*
+* If 'dispatching' is true, assume that the first event, and any subsequent
+* events cued at the same time, are ready for dispatch. (This is the timer
+* callback scenario.)
+*
+* Events may be subject to expiration times, as configured by the @expirations
+* attribute. By default, events never expire, and will still be dispatched, even
+* if they not on time. Expired events are deleted.
+*
+* If 'dispatching' is false, or all eligible events have been dispatched or
+* deleted, then the next upcoming event (if any) is cued.
 */
-void cue_iterate(t_cue *x, t_bool output_now) {
+void cue_process_queue(t_cue *x, t_bool dispatching) {
   t_max_err error;
   t_itm *itm;
   double now_ticks;
   double now_ticks_ish;
   t_atomarray *event_atoms;
-  t_atom *out_atoms;
   long num_out_atoms;
+  t_atom *out_atoms;
   t_symbol *event_msg;
   t_atom_float event_ticks;
   t_bool event_expires;
-  double expiration_ticks = -1;
-  t_bool event_on_schedule;
+  double expiration_ticks = 0.0;
   double last_event_ticks = -1.0;
-  t_atom_long deleted_index = -1;
+  t_bool on_time;
+  t_bool at_dispatch_time;
 
   // get current time
   itm = (t_itm *)time_getitm(x->timer);
   now_ticks = itm_getticks(itm);
   now_ticks_ish = now_ticks - 0.00001;
 
-  // if it's not the time we expected (due to user scrubbing),
-  // must then adjust all queued events accordingly
-  if (output_now && (x->expected_at_ticks != -1.0)) {
+  if (x->verbose) {
+    object_post(
+      (t_object *)x,
+      "Processing queue to %s at %.3f ticks @ '%s'",
+      (dispatching ? "dispatch" : "cue"),
+      now_ticks,
+      x->name->s_name
+    );
+  }
+
+  // Check for scrub
+  if (dispatching) {
+    t_bool scrub_detected = cue_check_for_scrub(x, now_ticks);
+    if (scrub_detected) {
+      return;
+    }
+  }
+
+  // iterate through events
+  while (linklist_getsize(x->queue) > 0) {
+    // pull first item off of queue
+    event_atoms = (t_atomarray *)linklist_getindex(x->queue, 0);
+    if (event_atoms == NULL) {
+      object_error(
+        (t_object *)x,
+        "Failed to get event @ '%s'",
+        x->name->s_name
+      );
+      return;
+    }
+
+    // copy event atoms
+    error = atomarray_getatoms(event_atoms, &num_out_atoms, &out_atoms);
+    if (error) {
+      object_error(
+        (t_object *)x,
+        "Failed to get event contents @ '%s' (%d)",
+        x->name->s_name,
+        error
+      );
+      return;
+    }
+
+    // get event time
+    event_ticks = atom_getfloat(out_atoms);
+
+    // get event message
+    event_msg = atom_getsym(out_atoms + 1);
+
+    // look up expiration period
+    event_expires = false;
+    expiration_ticks = 0.0;
+    if (dictionary_hasentry(x->expirations_dictionary, event_msg)) {
+      event_expires = true;
+      error = dictionary_getfloat(
+        x->expirations_dictionary,
+        event_msg,
+        &expiration_ticks
+      );
+      if (error) {
+        object_error(
+          (t_object *)x,
+          "Failed to look up expiration @ '%s' (%d)",
+          x->name->s_name,
+          error
+        );
+        return;
+      }
+    }
+
+    // event is "on schedule" if it is not later than the expiration window
+    on_time = (event_ticks >= (now_ticks_ish - expiration_ticks));
+
+    // event is in "dispatch group" if it is either the first in queue *or*
+    // cued at the same time as the first in queue
+    at_dispatch_time = (
+      (last_event_ticks == -1.0) ||
+      (last_event_ticks == event_ticks)
+    );
+
+    if (x->verbose) {
+      object_post(
+        (t_object*)x,
+        "Found '%s' event cued at %.3f ticks "
+        "(+%.3f expiration ticks / %s on time / %s at dispatch time) @ '%s'",
+        event_msg->s_name,
+        event_ticks,
+        expiration_ticks,
+        (on_time ? "IS" : "is NOT"),
+        (at_dispatch_time ? "IS" : "is NOT"),
+        x->name->s_name
+      );
+
+      if (!on_time) {
+        object_warn(
+          (t_object *)x,
+          "'%s' event is %.3f ticks late @ '%s'",
+          event_msg->s_name,
+          now_ticks - event_ticks,
+          x->name->s_name
+        );
+      }
+    }
+
+    // determine whether to dispatch, delete, or cue
+    if (
+      (on_time && at_dispatch_time && dispatching) ||
+      (!on_time && !event_expires)
+    ) {
+      // dispatch event
+      if (x->verbose) {
+        object_post((t_object*)x, "Dispatching event @ '%s'", x->name->s_name);
+      }
+
+      cue_dispatch_first_event(x, event_atoms, num_out_atoms, out_atoms);
+
+      // store time so that all events at same time are output at once
+      last_event_ticks = event_ticks;
+
+    } else if (!on_time) {
+      // delete expired event
+      if (x->verbose) {
+        object_post((t_object*)x, "Deleting event @ '%s'", x->name->s_name);
+      }
+
+      cue_delete_first_event(x);
+
+    } else {
+      // cue upcoming event
+      if (x->verbose) {
+        object_post((t_object*)x, "Cueing event @ '%s'", x->name->s_name);
+      }
+
+      cue_schedule_next(x, event_ticks, now_ticks);
+
+      break;
+    }
+  }
+}
+
+/** Dispatch first event in queue */
+void cue_dispatch_first_event(
+  t_cue *x,
+  t_atomarray *event_atoms,
+  long num_out_atoms,
+  t_atom *out_atoms
+) {
+  t_max_err error;
+
+  // remove event from queue first so it doesn't get recursively
+  // re-triggered if it's a "done" event.
+  // "chuck" it so that it can be used for output, and freed afterwards.
+  error = linklist_chuckindex(x->queue, 0);
+  if (error) {
+    object_error(
+      (t_object *)x,
+      "Failed to chuck event @ '%s'",
+      x->name->s_name
+    );
+    return;
+  }
+
+  // output event
+  if (num_out_atoms > 1) {
+    outlet_anything(
+      x->event_outlet,
+      atom_getsym(out_atoms + 1),
+      (short)(num_out_atoms - 2),
+      out_atoms + 2
+    );
+  }
+
+  // free event
+  error = object_free(event_atoms);
+  if (error) {
+    object_error(
+      (t_object *)x,
+      "Failed to free dispatched event @ '%s' (%d)",
+      x->name->s_name,
+      error
+    );
+  }
+}
+
+/** Delete event from queue, returning true upon success */
+void cue_delete_first_event(t_cue *x) {
+  t_atom_long deleted_index = -1;
+  deleted_index = linklist_deleteindex(x->queue, 0);
+  if (deleted_index == -1) {
+    object_error(
+      (t_object *)x,
+      "Failed to delete event @ '%s'",
+      x->name->s_name
+    );
+  }
+}
+
+/** Schedule timer to fire at desired_ticks */
+void cue_schedule_next(t_cue *x, double desired_ticks, double now_ticks) {
+  t_atom next_event_at_atom;
+  t_max_err error;
+
+  // store expected callback time to compare with reality later
+  // (in case user has scrubbed around)
+  x->expected_at_ticks = desired_ticks;
+
+  error = atom_setfloat(&next_event_at_atom, desired_ticks - now_ticks);
+  if (error) {
+    object_error(
+      (t_object *)x,
+      "Failed to write timer value @ '%s' (%d)",
+      x->name->s_name,
+      error
+    );
+    return;
+  }
+  time_setvalue(x->timer, NULL, 1, &next_event_at_atom);
+  time_schedule(x->timer, NULL);
+}
+
+/**
+* Check now_ticks against expected_at_ticks to see if transport has been
+* scrubbed (or looped). If so, offset queued events accordingly.
+*
+* @return true if scrub was dectected
+*/
+t_bool cue_check_for_scrub(t_cue *x, double now_ticks) {
+  if (x->expected_at_ticks != -1.0) {
     double scrub_delta = now_ticks - x->expected_at_ticks;
 
     if (fabs(scrub_delta) > 0.000001 && (scrub_delta != -0.0)) {
@@ -361,135 +631,24 @@ void cue_iterate(t_cue *x, t_bool output_now) {
       // scrub all events
       linklist_funall(x->queue, (method)cue_scrub_event, &scrub_delta);
 
+      if (x->verbose) {
+        object_post(
+          (t_object*)x,
+          "Detected scrub of %.3f ticks @ '%s'",
+          scrub_delta,
+          x->name->s_name
+        );
+      }
+
       // now output scrub_delta in beats for the benefit of others
       outlet_float(x->scrub_outlet, scrub_delta);
 
       // if desired start time is in the future, re-schedule this call
       if (desired_ticks > now_ticks) {
         cue_schedule_next(x, desired_ticks, now_ticks);
-        return;
+        return true;
       }
     }
   }
-
-  // iterate through events
-  while (linklist_getsize(x->queue) > 0) {
-
-    // Pull first item off of queue
-    event_atoms = (t_atomarray *)linklist_getindex(x->queue, 0);
-    if (event_atoms == NULL) {
-      object_error((t_object *)x, "No first event in queue for %s.", x->name->s_name);
-      return;
-    }
-
-    // copy event atoms
-    error = atomarray_getatoms(event_atoms, &num_out_atoms, &out_atoms);
-    if (error) {
-      object_error((t_object *)x, "Error copying event message for output for %s. (%d)", x->name->s_name, error);
-      return;
-    }
-
-    // get event time
-    event_ticks = atom_getfloat(out_atoms);
-
-    event_expires = false;
-
-    // get event message
-    event_msg = atom_getsym(out_atoms + 1);
-
-    // look up expiration period
-    if (dictionary_hasentry(x->expirations_dictionary, event_msg)) {
-      event_expires = true;
-      error = dictionary_getfloat(x->expirations_dictionary, event_msg, &expiration_ticks);
-      if (error) {
-        object_error((t_object *)x, "Error fetching expiration. (%d)", error);
-        return;
-      }
-    }
-
-    // check if event is on schedule
-    event_on_schedule = (
-      (!event_expires && (event_ticks >= now_ticks_ish)) ||
-      (event_expires && (event_ticks >= (now_ticks_ish - expiration_ticks)))
-    );
-
-    // if (x->verbose) object_post((t_object*)x, "Event from %s claims to be at %f ticks.", x->name->s_name, event_ticks);
-
-    if (x->verbose && !event_on_schedule) {
-      object_warn(
-        (t_object *)x,
-        "[%s] MISSED %s EVENT scheduled at %f but now it's %f",
-        x->name->s_name, event_msg->s_name, event_ticks, now_ticks);
-    }
-
-    // check if event should be output now
-    if (
-      // outputting now and event is on schedule and is first in queue or is at same time as first in queue
-      (event_on_schedule && output_now && ((last_event_ticks == -1.0) || (last_event_ticks == event_ticks))) ||
-      // critical message is behind schedule (outputting now or not)
-      (!event_on_schedule && !event_expires)
-    ) {
-      // remove event from queue first so it doesn't get recursively
-      // re-triggered if it's a "done" event.
-      // "chuck" it so that it can be used for output, and freed afterwards.
-      error = linklist_chuckindex(x->queue, 0);
-      if (error) {
-        object_error((t_object *)x, "Error chucking first event in queue for %s.", x->name->s_name);
-        return;
-      }
-
-      // output event
-      if (num_out_atoms > 1) {
-        outlet_anything(x->event_outlet, event_msg, (short)(num_out_atoms-2), out_atoms+2);
-      }
-
-      // free event
-      error = object_free(event_atoms);
-      if (error) {
-        object_error((t_object *)x, "Error freeing event for %s. (%d)", x->name->s_name, error);
-        return;
-      }
-
-      // store time so that subsequent events at the same time may be output immediately
-      last_event_ticks = event_ticks;
-
-    } else if (
-      // outputting now and event is behind schedule
-      output_now && !event_on_schedule
-    ) {
-      // throw event out and keep moving
-      deleted_index = linklist_deleteindex(x->queue, 0);
-      if (deleted_index == -1) {
-        object_error((t_object *)x, "Error deleting first event in queue for %s.", x->name->s_name);
-        return;
-      }
-
-    } else {
-      // set timer to output event in the future
-      cue_schedule_next(x, event_ticks, now_ticks);
-      break;
-    }
-  }
-}
-
-/**
-* Schedule timer at time in ticks.
-*
-* This method is used internally--not exposed as an input.
-*/
-void cue_schedule_next(t_cue *x, double desired_ticks, double now_ticks) {
-  t_atom next_event_at_atom;
-  t_max_err error;
-
-  // store expected callback time to compare with reality later
-  // (in case user has scrubbed around)
-  x->expected_at_ticks = desired_ticks;
-
-  error = atom_setfloat(&next_event_at_atom, desired_ticks - now_ticks);
-  if (error) {
-    object_error((t_object *)x, "Error scheduling timer for %s. (%d)", x->name->s_name, error);
-    return;
-  }
-  time_setvalue(x->timer, NULL, 1, &next_event_at_atom);
-  time_schedule(x->timer, NULL);
+  return false;
 }
