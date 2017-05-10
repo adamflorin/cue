@@ -14,9 +14,9 @@ patcher.
 ## Developing
 
 **WARNING!** The Max SDK v7.1.0 posted on cycling74.com is several commits
-behind `master` on GitHub! See Cycling74/max-sdk#23. The latest `[cue]`
+behind `master` on GitHub! See Cycling74/max-sdk#23 . The latest `[cue]`
 externals here were built against
-Cycling74/max-sdk@84044d393f62d80e8ef32b9adb6fbcb2d89a6149.
+Cycling74/max-sdk@84044d393f62d80e8ef32b9adb6fbcb2d89a6149 .
 
 For Mac and PC:
 
