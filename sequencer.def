@@ -1,4 +1,0 @@
-LIBRARY sequencer.mxe
-
-EXPORTS
-	main
