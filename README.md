@@ -13,14 +13,9 @@ patcher.
 
 ## Developing
 
-**WARNING!** The Max SDK v7.1.0 posted on cycling74.com is several commits
-behind `master` on GitHub! See `Cycling74/max-sdk#23`. The latest `[cue]`
-externals here were built against
-`Cycling74/max-sdk@84044d393f62d80e8ef32b9adb6fbcb2d89a6149`.
-
 For Mac and PC:
 
-- Download the [Max SDK](https://github.com/Cycling74/max-sdk) from GitHub
+- Download the [Max SDK](https://github.com/Cycling74/max-sdk)
 - Clone this repository into `source`
 - Open Visual Studio or Xcode project file in `cue/source` and build
   (2x on Windows)
