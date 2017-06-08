@@ -3,6 +3,8 @@
 `[cue]` is a Max external that lets you cue Max messages
 to be dispatched at specified transport times.
 
+![.maxhelp](image.png)
+
 ## Using
 
 Clone this repository into `Documents/Max 7/Packages` (or whatever the exact
